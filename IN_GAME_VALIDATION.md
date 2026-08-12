@@ -9,12 +9,14 @@ done in one sitting; F requires a restart and a deliberate wait.
 ## Setup
 
 - Build and install this repository only: from its root, run
-  `./BUILD_AND_INSTALL.ps1 -GameDir "<Erenshor install folder>" -BepInExRoot "<active BepInEx profile folder>"`.
+  `./BUILD_AND_INSTALL.ps1 -GameDir "<Erenshor install folder>"`.
   The script compiles and installs only Erenshor Nemesis; it requires an Erenshor installation and
-  an active BepInEx profile with the referenced assemblies.
-- Config file (BepInEx profile): `BepInEx/config/forgetwhtuno.erenshor.nemesis.cfg`.
-  `...erenshor.pvp.cfg` is needed only for the PvP-dependent sections below.
-- Log: `BepInEx/LogOutput.log`. Keep it open in a tailing viewer; several checks are log-only.
+  a Lunaris developer reference (`Lunaris.dll` + `0Harmony.dll`) in `LunarisLibs\` or via `-LunarisLibDir`.
+  BepInEx is no longer required for this native version.
+- Settings (Lunaris config UI): `[Nemesis]`, `[Ambush]`, `[Selection]`, `[Cadence]`. Per-character
+  rivalry record/timestamps live in `plugins/config/ErenshorNemesis/nemesis-state.dat` instead, not
+  in the config UI.
+- Log: the Lunaris log. Keep it open in a tailing viewer; several checks are log-only.
 - For sections that explicitly use PvP, install Erenshor PvP and turn on its validation logging
   once: `/epvp validation on`. PvP is optional in normal Nemesis use.
 - Useful log greps: `nemesis_dialogue`, `nemesis_result_ignored`, `nemesis_character`,

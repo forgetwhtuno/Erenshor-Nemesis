@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using BepInEx.Configuration;
-using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -13,18 +11,22 @@ namespace ErenshorNemesis
     // PvP requests are requests: the PvP mod re-validates every rule and may refuse.
     internal static class NemesisDirector
     {
-        private static ConfigFile Config; private static ManualLogSource Log;
-        private static ConfigEntry<bool> Enabled, NotifyDeepSims, UseLlmVoice, NaturalAmbushes, ZoneTaunts;
-        private static ConfigEntry<int> ZoneTauntChance, ZoneTauntMinimumMinutes;
-        private static ConfigEntry<int> LevelRange, MinimumAmbushLevel, MinimumRivalryMinutes, VoiceTimeoutSeconds;
-        private static ConfigEntry<int> TauntMinimumMinutes, TauntMaximumMinutes, AmbushMinimumMinutes, AmbushMaximumMinutes, AmbushChance;
+        // General settings are native Lunaris typed config (visible/editable in the Lunaris config
+        // UI). Per-character rivalry state uses a separate mod-owned sidecar store: it needs a
+        // dynamic per-character section (plus legacy-name-keyed migration) that Lunaris typed
+        // config's fixed compile-time keys cannot express.
+        private static NemesisSettings Settings; private static NemesisStateStore State; private static INemesisLog Log;
+        private static NemesisConfigEntry<bool> Enabled, NotifyDeepSims, UseLlmVoice, NaturalAmbushes, ZoneTaunts;
+        private static NemesisConfigEntry<int> ZoneTauntChance, ZoneTauntMinimumMinutes;
+        private static NemesisConfigEntry<int> LevelRange, MinimumAmbushLevel, MinimumRivalryMinutes, VoiceTimeoutSeconds;
+        private static NemesisConfigEntry<int> TauntMinimumMinutes, TauntMaximumMinutes, AmbushMinimumMinutes, AmbushMaximumMinutes, AmbushChance;
 
-        private static ConfigEntry<string> Name;
-        private static ConfigEntry<int> Wins, Losses, Escapes, Retreats, Cancelled, Invalid, Taunts, Replies;
-        private static ConfigEntry<long> DesignatedUtc, LastTauntUtc, LastAmbushUtc, NextTauntUtc, NextAmbushUtc, LastZoneTauntUtc;
-        private static ConfigEntry<string> RecentZoneTaunts;
-        private static ConfigEntry<string> ProcessedMatches, RetiredName;
-        private static ConfigEntry<int> RivalrySeed, DialogueSequence, LastTemplateIndex, LastLineHash;
+        private static NemesisStateEntry<string> Name;
+        private static NemesisStateEntry<int> Wins, Losses, Escapes, Retreats, Cancelled, Invalid, Taunts, Replies;
+        private static NemesisStateEntry<long> DesignatedUtc, LastTauntUtc, LastAmbushUtc, NextTauntUtc, NextAmbushUtc, LastZoneTauntUtc;
+        private static NemesisStateEntry<string> RecentZoneTaunts;
+        private static NemesisStateEntry<string> ProcessedMatches, RetiredName;
+        private static NemesisStateEntry<int> RivalrySeed, DialogueSequence, LastTemplateIndex, LastLineHash;
 
         private const int MaxProcessedMatches = 24;
         private const int MaxRememberedZones = 6;
@@ -161,29 +163,25 @@ namespace ErenshorNemesis
             internal bool Settled;
         }
 
-        internal static void Initialize(ConfigFile config, ManualLogSource log)
+        internal static void Initialize(NemesisSettings settings, NemesisStateStore state, INemesisLog log)
         {
-            Config = config; Log = log;
-            // Writes are debounced below. Without this, every counter/sequence change rewrites
-            // the whole config file, which is a lot of disk churn for dialogue variety state.
-            try { config.SaveOnConfigSet = false; } catch { }
-            Enabled = config.Bind("Nemesis", "Enabled", true, "Enable the persistent Nemesis social system.");
-            NotifyDeepSims = config.Bind("Nemesis", "NotifyDeepSims", true, "Let Deep Sims observe sanitized Nemesis events when installed.");
-            UseLlmVoice = config.Bind("Nemesis", "UseLlmVoice", true, "When Deep Sims and Ollama are available, allow one guarded short LLM rivalry line; templates remain the fallback.");
-            VoiceTimeoutSeconds = config.Bind("Nemesis", "VoiceTimeoutSeconds", 12, "Seconds to wait for an optional generated line before the template is spoken instead, clamped to 4-60.");
-            NaturalAmbushes = config.Bind("Ambush", "Enabled", true, "Allow rare PvP ambush requests. PvP still validates every rule.");
-            LevelRange = config.Bind("Selection", "LevelRange", 3, "Candidate level range, clamped to 1-10.");
-            MinimumAmbushLevel = config.Bind("Ambush", "MinimumPlayerLevel", 5, "Natural Nemesis ambushes stay locked below this player level, clamped to 1-60. Forced testing still uses PvP's normal eligibility checks.");
-            MinimumRivalryMinutes = config.Bind("Ambush", "MinimumRivalryMinutes", 20, "A rivalry must be at least this old before natural ambush opportunities begin, clamped to 0-720.");
-            ZoneTaunts = config.Bind("Cadence", "ZoneEntryTaunts", true, "Allow an occasional rivalry line shortly after the player enters a different zone. Only the verified arrival is used; nothing that happened there is claimed.");
-            ZoneTauntChance = config.Bind("Cadence", "ZoneEntryChancePercent", 25, "Chance an eligible zone arrival produces a line, clamped to 1-100.");
-            ZoneTauntMinimumMinutes = config.Bind("Cadence", "ZoneEntryMinimumMinutes", 45, "Minimum minutes between zone-entry lines, clamped to 5-720. Zone lines also consume the ordinary taunt window.");
-            TauntMinimumMinutes = config.Bind("Cadence", "TauntMinimumMinutes", 18, "Minimum minutes between social taunt opportunities.");
-            TauntMaximumMinutes = config.Bind("Cadence", "TauntMaximumMinutes", 45, "Maximum minutes between social taunt opportunities.");
-            AmbushMinimumMinutes = config.Bind("Ambush", "MinimumMinutes", 35, "Minimum minutes between Nemesis ambush opportunities.");
-            AmbushMaximumMinutes = config.Bind("Ambush", "MaximumMinutes", 75, "Maximum minutes between Nemesis ambush opportunities.");
-            AmbushChance = config.Bind("Ambush", "OpportunityChancePercent", 20, "Chance an eligible opportunity requests PvP, clamped to 5-100.");
-            Save();
+            Settings = settings; State = state; Log = log;
+            Enabled = new NemesisConfigEntry<bool>(delegate { return Settings.Enabled; }, delegate(bool v) { Settings.Enabled = v; });
+            NotifyDeepSims = new NemesisConfigEntry<bool>(delegate { return Settings.NotifyDeepSims; }, delegate(bool v) { Settings.NotifyDeepSims = v; });
+            UseLlmVoice = new NemesisConfigEntry<bool>(delegate { return Settings.UseLlmVoice; }, delegate(bool v) { Settings.UseLlmVoice = v; });
+            VoiceTimeoutSeconds = new NemesisConfigEntry<int>(delegate { return Settings.VoiceTimeoutSeconds; }, delegate(int v) { Settings.VoiceTimeoutSeconds = v; });
+            NaturalAmbushes = new NemesisConfigEntry<bool>(delegate { return Settings.NaturalAmbushes; }, delegate(bool v) { Settings.NaturalAmbushes = v; });
+            LevelRange = new NemesisConfigEntry<int>(delegate { return Settings.LevelRange; }, delegate(int v) { Settings.LevelRange = v; });
+            MinimumAmbushLevel = new NemesisConfigEntry<int>(delegate { return Settings.MinimumAmbushLevel; }, delegate(int v) { Settings.MinimumAmbushLevel = v; });
+            MinimumRivalryMinutes = new NemesisConfigEntry<int>(delegate { return Settings.MinimumRivalryMinutes; }, delegate(int v) { Settings.MinimumRivalryMinutes = v; });
+            ZoneTaunts = new NemesisConfigEntry<bool>(delegate { return Settings.ZoneTaunts; }, delegate(bool v) { Settings.ZoneTaunts = v; });
+            ZoneTauntChance = new NemesisConfigEntry<int>(delegate { return Settings.ZoneTauntChance; }, delegate(int v) { Settings.ZoneTauntChance = v; });
+            ZoneTauntMinimumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.ZoneTauntMinimumMinutes; }, delegate(int v) { Settings.ZoneTauntMinimumMinutes = v; });
+            TauntMinimumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.TauntMinimumMinutes; }, delegate(int v) { Settings.TauntMinimumMinutes = v; });
+            TauntMaximumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.TauntMaximumMinutes; }, delegate(int v) { Settings.TauntMaximumMinutes = v; });
+            AmbushMinimumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.AmbushMinimumMinutes; }, delegate(int v) { Settings.AmbushMinimumMinutes = v; });
+            AmbushMaximumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.AmbushMaximumMinutes; }, delegate(int v) { Settings.AmbushMaximumMinutes = v; });
+            AmbushChance = new NemesisConfigEntry<int>(delegate { return Settings.AmbushChance; }, delegate(int v) { Settings.AmbushChance = v; });
         }
 
         internal static void Tick()
@@ -278,28 +276,28 @@ namespace ErenshorNemesis
 
         private static void Bind(string section)
         {
-            Name = Config.Bind(section, "NemesisName", "", "Selected persistent Nemesis for this character.");
-            Wins = Config.Bind(section, "WinsAgainstNemesis", 0, "Verified PvP wins.");
-            Losses = Config.Bind(section, "LossesToNemesis", 0, "Verified PvP losses.");
-            Escapes = Config.Bind(section, "Escapes", 0, "Verified matches the player disengaged from.");
-            Retreats = Config.Bind(section, "NemesisRetreats", 0, "Verified matches the Nemesis party retreated from.");
-            Cancelled = Config.Bind(section, "CancelledMatches", 0, "Matches cancelled before a verdict. These never advance the rivalry.");
-            Invalid = Config.Bind(section, "InvalidMatches", 0, "Matches voided by interference, spawn failure, or internal error. These never advance the rivalry.");
-            Taunts = Config.Bind(section, "TauntsSent", 0, "Bounded social cadence count.");
-            Replies = Config.Bind(section, "PlayerReplies", 0, "Player reply count; heard dialogue, never game fact.");
-            DesignatedUtc = Config.Bind(section, "DesignatedUtcTicks", 0L, "UTC selection timestamp.");
-            LastTauntUtc = Config.Bind(section, "LastTauntUtcTicks", 0L, "UTC taunt timestamp.");
-            LastAmbushUtc = Config.Bind(section, "LastAmbushUtcTicks", 0L, "UTC successful request timestamp.");
-            NextTauntUtc = Config.Bind(section, "NextTauntUtcTicks", 0L, "Persistent UTC deadline for the next taunt opportunity. Restarting never rerolls a pending deadline.");
-            NextAmbushUtc = Config.Bind(section, "NextAmbushUtcTicks", 0L, "Persistent UTC deadline for the next ambush opportunity. Restarting never rerolls a pending deadline.");
-            LastZoneTauntUtc = Config.Bind(section, "LastZoneTauntUtcTicks", 0L, "UTC timestamp of the last zone-entry line, so the cooldown survives a restart.");
-            RecentZoneTaunts = Config.Bind(section, "RecentZoneTaunts", "", "Recently remarked-on zones, so the same arrival is not repeated on every pass through.");
-            ProcessedMatches = Config.Bind(section, "ProcessedPvpMatchIds", "", "Bounded list of PvP match ids already applied, so a result is never counted twice across restarts.");
-            RetiredName = Config.Bind(section, "RetiredNemesisName", "", "Nemesis stopped by /enemesis disable. Selecting this name again resumes the rivalry with its record intact.");
-            RivalrySeed = Config.Bind(section, "RivalrySeed", 0, "Persistent non-gameplay seed for varied rivalry dialogue.");
-            DialogueSequence = Config.Bind(section, "DialogueSequence", 0, "Persistent bounded sequence used to vary templates.");
-            LastTemplateIndex = Config.Bind(section, "LastTemplateIndex", -1, "Prevents immediate repeated rivalry templates within one pool.");
-            LastLineHash = Config.Bind(section, "LastLineHash", 0, "Prevents the same line repeating immediately across stage or pool changes.");
+            Name = State.Bind(section, "NemesisName", "", "Selected persistent Nemesis for this character.");
+            Wins = State.Bind(section, "WinsAgainstNemesis", 0, "Verified PvP wins.");
+            Losses = State.Bind(section, "LossesToNemesis", 0, "Verified PvP losses.");
+            Escapes = State.Bind(section, "Escapes", 0, "Verified matches the player disengaged from.");
+            Retreats = State.Bind(section, "NemesisRetreats", 0, "Verified matches the Nemesis party retreated from.");
+            Cancelled = State.Bind(section, "CancelledMatches", 0, "Matches cancelled before a verdict. These never advance the rivalry.");
+            Invalid = State.Bind(section, "InvalidMatches", 0, "Matches voided by interference, spawn failure, or internal error. These never advance the rivalry.");
+            Taunts = State.Bind(section, "TauntsSent", 0, "Bounded social cadence count.");
+            Replies = State.Bind(section, "PlayerReplies", 0, "Player reply count; heard dialogue, never game fact.");
+            DesignatedUtc = State.Bind(section, "DesignatedUtcTicks", 0L, "UTC selection timestamp.");
+            LastTauntUtc = State.Bind(section, "LastTauntUtcTicks", 0L, "UTC taunt timestamp.");
+            LastAmbushUtc = State.Bind(section, "LastAmbushUtcTicks", 0L, "UTC successful request timestamp.");
+            NextTauntUtc = State.Bind(section, "NextTauntUtcTicks", 0L, "Persistent UTC deadline for the next taunt opportunity. Restarting never rerolls a pending deadline.");
+            NextAmbushUtc = State.Bind(section, "NextAmbushUtcTicks", 0L, "Persistent UTC deadline for the next ambush opportunity. Restarting never rerolls a pending deadline.");
+            LastZoneTauntUtc = State.Bind(section, "LastZoneTauntUtcTicks", 0L, "UTC timestamp of the last zone-entry line, so the cooldown survives a restart.");
+            RecentZoneTaunts = State.Bind(section, "RecentZoneTaunts", "", "Recently remarked-on zones, so the same arrival is not repeated on every pass through.");
+            ProcessedMatches = State.Bind(section, "ProcessedPvpMatchIds", "", "Bounded list of PvP match ids already applied, so a result is never counted twice across restarts.");
+            RetiredName = State.Bind(section, "RetiredNemesisName", "", "Nemesis stopped by /enemesis disable. Selecting this name again resumes the rivalry with its record intact.");
+            RivalrySeed = State.Bind(section, "RivalrySeed", 0, "Persistent non-gameplay seed for varied rivalry dialogue.");
+            DialogueSequence = State.Bind(section, "DialogueSequence", 0, "Persistent bounded sequence used to vary templates.");
+            LastTemplateIndex = State.Bind(section, "LastTemplateIndex", -1, "Prevents immediate repeated rivalry templates within one pool.");
+            LastLineHash = State.Bind(section, "LastLineHash", 0, "Prevents the same line repeating immediately across stage or pool changes.");
         }
 
         // 0.1.0 keyed only from the character name. Adopt that data once for the slot-qualified key.
@@ -307,7 +305,7 @@ namespace ErenshorNemesis
         {
             string legacy = "Character." + SafeKey(PlayerName());
             if (legacy == "Character." + CharacterKey) return;
-            ConfigEntry<string> legacyName = Config.Bind(legacy, "NemesisName", "", "Legacy name-keyed Nemesis, migrated to the slot-qualified section.");
+            NemesisStateEntry<string> legacyName = State.Bind(legacy, "NemesisName", "", "Legacy name-keyed Nemesis, migrated to the slot-qualified section.");
             if (string.IsNullOrWhiteSpace(legacyName.Value) || !string.IsNullOrWhiteSpace(Name.Value)) return;
             Name.Value = legacyName.Value;
             CopyInt(legacy, "WinsAgainstNemesis", Wins); CopyInt(legacy, "LossesToNemesis", Losses);
@@ -315,16 +313,16 @@ namespace ErenshorNemesis
             CopyInt(legacy, "RivalrySeed", RivalrySeed); CopyInt(legacy, "DialogueSequence", DialogueSequence);
             CopyLong(legacy, "DesignatedUtcTicks", DesignatedUtc); CopyLong(legacy, "LastTauntUtcTicks", LastTauntUtc);
             CopyLong(legacy, "LastAmbushUtcTicks", LastAmbushUtc);
-            ConfigEntry<string> legacyMatch = Config.Bind(legacy, "LastProcessedPvpMatchId", "", "Legacy single-result deduplication key.");
+            NemesisStateEntry<string> legacyMatch = State.Bind(legacy, "LastProcessedPvpMatchId", "", "Legacy single-result deduplication key.");
             if (!string.IsNullOrWhiteSpace(legacyMatch.Value)) ProcessedMatches.Value = Token(legacyMatch.Value, 48);
             legacyName.Value = ""; Dirty = true;
             Log.LogInfo("nemesis_migrated legacy=" + legacy + "; to=Character." + CharacterKey);
         }
 
-        private static void CopyInt(string section, string key, ConfigEntry<int> target)
-        { ConfigEntry<int> source = Config.Bind(section, key, 0, "Legacy value migrated to the slot-qualified section."); if (target.Value == 0) target.Value = source.Value; }
-        private static void CopyLong(string section, string key, ConfigEntry<long> target)
-        { ConfigEntry<long> source = Config.Bind(section, key, 0L, "Legacy value migrated to the slot-qualified section."); if (target.Value == 0L) target.Value = source.Value; }
+        private static void CopyInt(string section, string key, NemesisStateEntry<int> target)
+        { NemesisStateEntry<int> source = State.Bind(section, key, 0, "Legacy value migrated to the slot-qualified section."); if (target.Value == 0) target.Value = source.Value; }
+        private static void CopyLong(string section, string key, NemesisStateEntry<long> target)
+        { NemesisStateEntry<long> source = State.Bind(section, key, 0L, "Legacy value migrated to the slot-qualified section."); if (target.Value == 0L) target.Value = source.Value; }
 
         // Replacing an established rivalry destroys a record that cannot be recovered, so it needs
         // an explicit second command. A rivalry with no verified fight behind it is cheap to
@@ -529,13 +527,16 @@ namespace ErenshorNemesis
             return collapsed.Length <= 100 ? collapsed : collapsed.Substring(0, 100);
         }
 
-        private static void Toggle(string argument, ConfigEntry<bool> entry, string label)
+        internal static Action SaveSettings;
+
+        private static void Toggle(string argument, NemesisConfigEntry<bool> entry, string label)
         {
             string[] parts = (argument ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 2 && parts[1].Equals("on", StringComparison.OrdinalIgnoreCase)) entry.Value = true;
             else if (parts.Length == 2 && parts[1].Equals("off", StringComparison.OrdinalIgnoreCase)) entry.Value = false;
             else if (parts.Length != 1) { Say("[Nemesis] Usage: /enemesis " + parts[0].ToLowerInvariant() + " on|off"); return; }
-            Save(); Say("[Nemesis] " + label + " " + (entry.Value ? "ON." : "OFF."));
+            try { if (SaveSettings != null) SaveSettings(); } catch { }
+            Say("[Nemesis] " + label + " " + (entry.Value ? "ON." : "OFF."));
         }
 
         private static void TryAmbush(bool forced)
@@ -920,7 +921,7 @@ namespace ErenshorNemesis
             NextTaunt = RestoreDeadline(NextTauntUtc, now, RollTauntSeconds(), MaxTauntSeconds());
             NextAmbush = RestoreDeadline(NextAmbushUtc, now, RollAmbushSeconds(), MaxAmbushSeconds());
         }
-        private static float RestoreDeadline(ConfigEntry<long> entry, float now, float rolledSeconds, float horizonSeconds)
+        private static float RestoreDeadline(NemesisStateEntry<long> entry, float now, float rolledSeconds, float horizonSeconds)
         {
             long ticks = entry == null ? 0L : entry.Value;
             if (ticks > 0)
@@ -1058,7 +1059,7 @@ namespace ErenshorNemesis
         private static void Say(string value) { NemesisPluginChat(value, "lightblue"); }
         private static void NemesisPluginChat(string value, string color) { ErenshorNemesisPlugin.Chat(value, color); }
 
-        private static void Save() { Dirty = false; SaveAt = Time.unscaledTime + 5f; try { if (Config != null) Config.Save(); } catch { } }
+        private static void Save() { Dirty = false; SaveAt = Time.unscaledTime + 5f; try { if (State != null) State.Save(); } catch { } }
         private static void SaveIfDirty(float now) { SaveIfDirty(now, false); }
         private static void SaveIfDirty(float now, bool force) { if (Dirty && (force || now >= SaveAt)) Save(); }
 
@@ -1067,7 +1068,7 @@ namespace ErenshorNemesis
             Stopping = true; ClearPendingChange();
             for (int i = 0; i < Pending.Count; i++) Pending[i].Settled = true;
             Pending.Clear();
-            try { if (Config != null) Config.Save(); } catch { }
+            try { if (State != null) State.Save(); } catch { }
             CharacterKey = ""; Dirty = false;
         }
 
