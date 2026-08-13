@@ -4,7 +4,7 @@ A standalone persistent rival system for Erenshor. It works without Deep Sims or
 
 ## Implemented in 0.2.0
 
-- One explicitly selected Nemesis per player character, persisted in the BepInEx config sidecar and keyed from the verified save-slot index plus the character name, so two slots sharing a name keep separate rivalries. Data written by 0.1.0 under the name-only key is migrated once.
+- One explicitly selected Nemesis per player character, persisted in a mod-owned sidecar file (`plugins/config/ErenshorNemesis/nemesis-state.dat`) and keyed from the verified save-slot index plus the character name, so two slots sharing a name keep separate rivalries. Data written by 0.1.0 under the name-only key is migrated once.
 - Same-level candidate discovery (default +/-3), excluding the current party, the player, the player's own characters in other save slots, GM/special Sims, tutorial Sims, remote co-op humans, and invalid or blank profiles. A same-zone Sim can be a social rival; PvP independently refuses to build an off-map party from anyone still present in the zone.
 - Expanded NPC-style template pools for designation, per-stage taunts, per-stage replies, player victory, Nemesis victory, player escape, Nemesis retreat, and ambush arrival. Lines stay good-natured and never invent shared history, loot, or combat details.
 - Bounded grudge stages (`new`, `rival`, `heated`) derived mainly from verified match results.
@@ -113,7 +113,13 @@ discarded by a single command:
 6. Finish the fight and run `/enemesis history`; the verified record should update within several seconds.
 7. Zone out mid-fight once. The match should be recorded as cancelled and leave the record unchanged.
 
-Natural ambushes default to a 20% base roll at opportunities 35-75 minutes apart. Change these under `[Ambush]` in `forgetwhtuno.erenshor.nemesis.cfg`.
+Natural ambushes default to a 20% base roll at opportunities 35-75 minutes apart. Change these under `[Ambush]` in the Lunaris config UI.
+
+## Build / install
+
+This version requires **native Lunaris** — BepInEx is no longer required. `BUILD_AND_INSTALL.ps1` locates the current Erenshor install and the Lunaris developer reference, compiles, and installs only `ErenshorNemesis.dll` to `<Erenshor>\plugins\`. Lunaris manages enable/disable and the general settings (`[Nemesis]`, `[Ambush]`, `[Selection]`, `[Cadence]`). Per-character rivalry record/timestamps/dialogue-variety state live in their own mod-owned sidecar file, not in the Lunaris config UI — that data was never meant to be hand-edited as a "setting." A legacy BepInEx release remains available in this repository's Git history.
+
+**Status:** this native build compiles cleanly against the installed Lunaris/Assembly-CSharp. A new deterministic test (`tests/RUN_TESTS.ps1`) covers the new sidecar persistence store (round-trip, section isolation, escaping, legacy-key migration semantics) and passes. The mod's existing `/enemesis selftest` in-game self-check has not yet been run live in-game under Lunaris. Do not assume hot-reload safety until that pass is done.
 
 ## Credits and Inspiration
 

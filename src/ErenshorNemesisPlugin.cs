@@ -1,25 +1,35 @@
 using System;
-using BepInEx;
+using System.IO;
+using Lunaris;
+using Lunaris.Config;
 using HarmonyLib;
 using UnityEngine;
 
 namespace ErenshorNemesis
 {
-    [BepInPlugin("forgetwhtuno.erenshor.nemesis", "Erenshor Nemesis", "0.2.0")]
-    [BepInProcess("Erenshor.exe")]
-    public sealed class ErenshorNemesisPlugin : BaseUnityPlugin
+    [LunarisPlugin("forgetwhtuno.erenshor.nemesis", "0.2.0", "forgetwhtuno",
+        "Bounded persistent rival identity, grudge/dialogue/cadence, and optional PvP/Deep Sims bridges. Social rivalry only.")]
+    [LunarisPermission(LunarisPermission.FileAccess | LunarisPermission.Reflection | LunarisPermission.Harmony)]
+    public sealed class ErenshorNemesisPlugin : LunarisPlugin
     {
         internal static ErenshorNemesisPlugin Instance;
         private Harmony _harmony;
+        private NemesisSettings _settings;
 
         private void Awake()
         {
-            Instance = this; NemesisDirector.Initialize(Config, Logger);
+            Instance = this;
+            _settings = new NemesisSettings();
+            Config.Register(ref _settings);
+            string dataDirectory = Path.Combine(Path.Combine(AppContext.BaseDirectory, "plugins", "config"), "ErenshorNemesis");
+            NemesisStateStore state = new NemesisStateStore(Path.Combine(dataDirectory, "nemesis-state.dat"));
+            NemesisDirector.SaveSettings = delegate { try { Config.Save(); } catch { } };
+            NemesisDirector.Initialize(_settings, state, new LunarisNemesisLog(Logging));
             _harmony = new Harmony("forgetwhtuno.erenshor.nemesis"); _harmony.PatchAll();
-            Logger.LogInfo("Erenshor Nemesis 0.2.0 loaded. Use /enemesis candidates, /enemesis select <Sim>, and /enemesis status.");
+            Logging.LogInfo("Erenshor Nemesis 0.2.0 loaded. Use /enemesis candidates, /enemesis select <Sim>, and /enemesis status.");
         }
-        private void Update() { try { NemesisDirector.Tick(); } catch (Exception ex) { Logger.LogError("Nemesis update failed: " + ex); } }
-        private void OnDestroy() { try { if (_harmony != null) _harmony.UnpatchSelf(); } catch { } NemesisDirector.Shutdown(); Instance = null; }
+        private void Update() { try { NemesisDirector.Tick(); } catch (Exception ex) { Logging.LogError("Nemesis update failed: " + ex); } }
+        private void OnDestroy() { try { if (_harmony != null) _harmony.UnpatchSelf(); } catch { } _harmony = null; NemesisDirector.Shutdown(); Instance = null; }
 
         internal bool Handle(TypeText input, string raw)
         {
