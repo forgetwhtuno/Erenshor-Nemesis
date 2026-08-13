@@ -66,6 +66,12 @@ internal static class StandaloneStateStoreTests
             store5.Bind("Character.slot0_bob", "NemesisName", "", "desc");
             store5.Save();
             Check("read-only bind does not corrupt the file", File.Exists(path));
+
+            string hubIdle = NemesisHubPresentation.Build(true, false, null, 0, null, false, 4);
+            Check("hub no-rival status is concise", hubIdle == "No rival | 4 candidate(s)");
+            string hubRival = NemesisHubPresentation.Build(true, true, new string('R', 120), 17, "3W/2L", true, 0);
+            Check("hub rival status stays bounded", hubRival.Length <= NemesisHubPresentation.MaxStatusLength);
+            Check("hub rival status exposes pending confirmation", hubRival.Contains("confirmation pending"));
         }
         finally
         {

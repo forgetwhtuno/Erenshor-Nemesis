@@ -19,6 +19,7 @@ $out = Join-Path $env:TEMP "ErenshorNemesis.StateStoreTests.exe"
 # no game, BepInEx, or Lunaris dependency.
 & $csc /nologo /target:exe ("/out:{0}" -f $out) `
     (Join-Path $ModRoot "src\NemesisStateStore.cs") `
+    (Join-Path $ModRoot "src\NemesisHubPresentation.cs") `
     (Join-Path $ScriptRoot "StandaloneStateStoreTests.cs")
 if ($LASTEXITCODE -ne 0) { throw "Nemesis state store test compilation failed." }
 
