@@ -132,3 +132,12 @@ This version requires **native Lunaris** — BepInEx is no longer required. `BUI
 This project has been developed heavily with AI-assisted coding tools. The goal has been to build features I wanted to use in Erenshor, with development guided through design, testing, playtesting, audits, and iteration against the game. Bug reports, code review, corrections, and contributions from experienced Erenshor modders are welcome.
 
 This is an unofficial, community-made mod for Erenshor and is not affiliated with or endorsed by the game's developer.
+
+
+## Optional Suite Hub integration
+
+Erenshor Suite Hub is **optional**. Nemesis exposes a versioned `NemesisControlApi`/Aura surface without referencing Hub types or assuming Hub load order. Hub can render concise rival status and the safe user-facing settings now exposed through `settings.basic`/`settings.advanced`: Nemesis enabled, natural ambush requests, zone-entry rivalry lines, Deep Sims notification, and optional LLM rivalry voice.
+
+Nemesis intentionally has no dedicated module panel or floating launcher; `/enemesis` remains the complete standalone command surface. Selection/clear/confirm/cancel actions continue through the existing deferred Nemesis state machine, including established-rival confirmation semantics and persistent record protection.
+
+The current Suite Hub renderer can transport two-argument actions but does not yet render arbitrary argument-entry/action controls on a module page. The provider therefore advertises `select(name)`, `clear`, `confirm`, and `cancel` over Aura without fabricating candidate state or modifying Hub in this workstream.

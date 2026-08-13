@@ -820,6 +820,58 @@ namespace ErenshorNemesis
         private static string ChooseTauntLine()
         { string stage = Stage(); return Choose(stage == "heated" ? TauntHeated : stage == "rival" ? TauntRival : TauntNew, "taunt:" + stage); }
         private static bool SafeForSocial() { try { return !GameData.Zoning && GameData.PlayerControl.Myself.Alive; } catch { return false; } }
+        internal static bool ControlReady() { return Ready(); }
+        internal static bool ControlHasNemesis() { return HasNemesis(); }
+        internal static string ControlNemesisName() { return HasNemesis() ? Name.Value : null; }
+        internal static int ControlGrudgePoints() { return HasNemesis() ? GrudgePoints() : 0; }
+        internal static string ControlRecordText() { return HasNemesis() ? RecordText() : null; }
+        internal static string[] ControlCandidateNames() { return Candidates().Select(x => x.SimName).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray(); }
+        internal static string ControlStatus() { return Status(); }
+        internal static bool ControlHasPendingChange() { return HasPendingChange(); }
+        internal static string ControlPendingChangeText()
+        {
+            if (!HasPendingChange()) return null;
+            return PendingDisable ? "Stop current rivalry" : "Replace with " + Clean(PendingSelection, 40);
+        }
+        internal static bool ControlSelect(string requested)
+        {
+            if (!Ready() || string.IsNullOrWhiteSpace(requested)) return false;
+            Select(requested.Trim());
+            return true;
+        }
+        internal static bool ControlClear()
+        {
+            if (!Ready() || !HasNemesis()) return false;
+            Disable();
+            return true;
+        }
+        internal static bool ControlConfirm()
+        {
+            if (!Ready() || !HasPendingChange()) return false;
+            ConfirmPendingChange();
+            return true;
+        }
+        internal static bool ControlCancelPending()
+        {
+            if (!Ready() || !HasPendingChange()) return false;
+            CancelPendingChange();
+            return true;
+        }
+        internal static bool ControlEnabled() { return Enabled != null && Enabled.Value; }
+        internal static bool ControlNaturalAmbushes() { return NaturalAmbushes != null && NaturalAmbushes.Value; }
+        internal static bool ControlZoneTaunts() { return ZoneTaunts != null && ZoneTaunts.Value; }
+        internal static bool ControlNotifyDeepSims() { return NotifyDeepSims != null && NotifyDeepSims.Value; }
+        internal static bool ControlUseLlmVoice() { return UseLlmVoice != null && UseLlmVoice.Value; }
+        internal static bool ControlSetEnabled(bool value) { return SetControlSetting(Enabled, value); }
+        internal static bool ControlSetNaturalAmbushes(bool value) { return SetControlSetting(NaturalAmbushes, value); }
+        internal static bool ControlSetZoneTaunts(bool value) { return SetControlSetting(ZoneTaunts, value); }
+        internal static bool ControlSetNotifyDeepSims(bool value) { return SetControlSetting(NotifyDeepSims, value); }
+        internal static bool ControlSetUseLlmVoice(bool value) { return SetControlSetting(UseLlmVoice, value); }
+        private static bool SetControlSetting(NemesisConfigEntry<bool> entry, bool value)
+        {
+            if (entry == null) return false; entry.Value = value; try { if (SaveSettings != null) SaveSettings(); } catch { } return true;
+        }
+
         private static bool HasNemesis() { return Name != null && !string.IsNullOrWhiteSpace(Name.Value); }
         private static string SceneName() { try { return SceneManager.GetActiveScene().name ?? ""; } catch { return ""; } }
 
