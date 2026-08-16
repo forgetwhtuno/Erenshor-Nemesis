@@ -121,17 +121,13 @@ Natural ambushes default to a 20% base roll at opportunities 35-75 minutes apart
 
 This version requires **native Lunaris** — BepInEx is no longer required. `BUILD_AND_INSTALL.ps1` locates the current Erenshor install and the Lunaris developer reference, compiles, and installs only `ErenshorNemesis.dll` to `<Erenshor>\plugins\`. Lunaris manages enable/disable and the general settings (`[Nemesis]`, `[Ambush]`, `[Selection]`, `[Cadence]`). Per-character rivalry record/timestamps/dialogue-variety state live in their own mod-owned sidecar file, not in the Lunaris config UI — that data was never meant to be hand-edited as a "setting." A legacy BepInEx release remains available in this repository's Git history.
 
-**Status:** this native build compiles cleanly against the installed Lunaris/Assembly-CSharp. A new deterministic test (`tests/RUN_TESTS.ps1`) covers the new sidecar persistence store (round-trip, section isolation, escaping, legacy-key migration semantics) and passes. The mod's existing `/enemesis selftest` in-game self-check has not yet been run live in-game under Lunaris. Do not assume hot-reload safety until that pass is done.
+**Status:** the deterministic test suite (`tests/RUN_TESTS.ps1`) passes, including sidecar persistence, candidate selection, and control-policy coverage. A fresh native build and plugin-identity audit remain pending because the current Lunaris resolver is unavailable in this session. The mod's existing `/enemesis selftest` in-game self-check has not yet been run live under Lunaris. Do not assume hot-reload safety until that pass is done.
 
 ## Credits and Inspiration
 
 ### Compatibility / related projects
 
 - **[Erenshor COOP](https://github.com/MizukiBelhi/ErenshorCoop) by MizukiBelhi** — important technical reference and compatibility target for remote-human/networked-Sim detection. I have also tested against a locally updated copy for recent Erenshor and Deep Sims compatibility.
-
-## Development note
-
-This project has been developed heavily with AI-assisted coding tools. The goal has been to build features I wanted to use in Erenshor, with development guided through design, testing, playtesting, audits, and iteration against the game. Bug reports, code review, corrections, and contributions from experienced Erenshor modders are welcome.
 
 This is an unofficial, community-made mod for Erenshor and is not affiliated with or endorsed by the game's developer.
 
