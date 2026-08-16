@@ -72,6 +72,7 @@ internal static class StandaloneStateStoreTests
             string hubRival = NemesisHubPresentation.Build(true, true, new string('R', 120), 17, "3W/2L", true, 0);
             Check("hub rival status stays bounded", hubRival.Length <= NemesisHubPresentation.MaxStatusLength);
             Check("hub rival status exposes pending confirmation", hubRival.Contains("confirmation pending"));
+            Check("candidate social selection policy", NemesisCandidateSelectionPolicy.RunSelfTests().StartsWith("PASS", StringComparison.Ordinal));
         }
         finally
         {

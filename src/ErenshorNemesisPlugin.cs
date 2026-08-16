@@ -4,6 +4,7 @@ using Lunaris;
 using Lunaris.Config;
 using HarmonyLib;
 using UnityEngine;
+using ForgottenRoads.StandaloneUi;
 
 namespace ErenshorNemesis
 {
@@ -19,6 +20,9 @@ namespace ErenshorNemesis
         private Harmony _harmony;
         private NemesisSettings _settings;
         private string _pendingControlSelection;
+        private bool _pendingControlSelectionAutomatic;
+        private static NemesisControlState _fallbackCachedState;
+        private static float _nextFallbackStateRefresh;
         private int _pendingControlAction;
         private NemesisSuiteAuraProvider _auraProvider;
 
@@ -35,9 +39,40 @@ namespace ErenshorNemesis
             try { _auraProvider = new NemesisSuiteAuraProvider(this); }
             catch (Exception ex) { Logging.LogError("Nemesis Aura provider init failed: " + ex); }
             Logging.LogInfo("Erenshor Nemesis 0.2.0 loaded. Use /enemesis candidates, /enemesis select <Sim>, and /enemesis status.");
+            StandaloneFallbackUi.Initialize(this, "nemesis", "NEMESIS",
+                "Automatic candidates never include native Friends. Friends shown below require deliberate /enemesis select <name>.", 120f,
+                BuildFallbackStatus,
+                new FallbackAction("Select First Auto", SelectFirstCandidate, delegate { return (FallbackState().AutomaticCandidateNames ?? new string[0]).Length > 0; }),
+                new FallbackAction("Confirm", NemesisControlApi.TryConfirmPending, delegate { return FallbackState().HasPendingConfirmation; }),
+                new FallbackAction("Cancel", NemesisControlApi.TryCancelPending, delegate { return FallbackState().HasPendingConfirmation; }),
+                new FallbackAction("Clear Rival", NemesisControlApi.TryClear, delegate { return FallbackState().HasNemesis; }));
         }
+        private static NemesisControlState FallbackState()
+        {
+            float now = Time.unscaledTime;
+            if (_fallbackCachedState == null || now >= _nextFallbackStateRefresh)
+            {
+                _fallbackCachedState = NemesisControlApi.GetBasicState();
+                _nextFallbackStateRefresh = now + 0.35f;
+            }
+            return _fallbackCachedState;
+        }
+
+        private static string BuildFallbackStatus()
+        {
+            NemesisControlState state = FallbackState();
+            string presentation = state.CandidatePresentation ?? "[Nemesis] Candidates unavailable.";
+            if (presentation.StartsWith("[Nemesis] ", StringComparison.Ordinal)) presentation = presentation.Substring(10);
+            string status = NemesisHubPresentation.Build(state.Enabled, state.HasNemesis, state.NemesisName,
+                state.GrudgePoints, state.Record, state.HasPendingConfirmation,
+                state.AutomaticCandidateNames == null ? 0 : state.AutomaticCandidateNames.Length);
+            return status + "\n" + presentation;
+        }
+        private static bool SelectFirstCandidate()
+        { string[] names = FallbackState().AutomaticCandidateNames ?? new string[0]; return names.Length > 0 && NemesisControlApi.TrySelectAutomatic(names[0]); }
         private void Update()
         {
+            StandaloneFallbackUi.Tick(SuiteUiPolicy.IsGameplayReady());
             try
             {
                 int action = _pendingControlAction; _pendingControlAction = 0;
@@ -46,7 +81,10 @@ namespace ErenshorNemesis
                 else if (action == 3) NemesisDirector.ControlCancelPending();
                 if (!string.IsNullOrWhiteSpace(_pendingControlSelection))
                 {
-                    string selection = _pendingControlSelection; _pendingControlSelection = null; NemesisDirector.ControlSelect(selection);
+                    string selection = _pendingControlSelection;
+                    bool automatic = _pendingControlSelectionAutomatic;
+                    _pendingControlSelection = null; _pendingControlSelectionAutomatic = false;
+                    if (automatic) NemesisDirector.ControlSelectAutomatic(selection); else NemesisDirector.ControlSelect(selection);
                 }
                 NemesisDirector.Tick();
             }
@@ -54,17 +92,24 @@ namespace ErenshorNemesis
         }
         private void OnDestroy()
         {
+            StandaloneFallbackUi.Dispose();
             try { if (_auraProvider != null) _auraProvider.Unregister(); } catch { }
             _auraProvider = null;
             try { if (_harmony != null) _harmony.UnpatchSelf(); } catch { }
-            _harmony = null; _pendingControlSelection = null; _pendingControlAction = 0;
+            _harmony = null; _pendingControlSelection = null; _pendingControlSelectionAutomatic = false; _pendingControlAction = 0;
+            _fallbackCachedState = null; _nextFallbackStateRefresh = 0f;
             NemesisDirector.Shutdown(); SuiteUiPolicy.Reset(); Instance = null;
         }
 
-        internal bool RequestControlSelect(string simName) { if (string.IsNullOrWhiteSpace(simName)) return false; _pendingControlSelection = simName.Trim(); _pendingControlAction = 0; return true; }
-        internal bool RequestControlClear() { _pendingControlAction = 1; _pendingControlSelection = null; return true; }
-        internal bool RequestControlConfirm() { _pendingControlAction = 2; _pendingControlSelection = null; return true; }
-        internal bool RequestControlCancelPending() { _pendingControlAction = 3; _pendingControlSelection = null; return true; }
+        internal bool RequestControlSelect(string simName, bool automatic)
+        {
+            if (string.IsNullOrWhiteSpace(simName)) return false;
+            _pendingControlSelection = simName.Trim(); _pendingControlSelectionAutomatic = automatic; _pendingControlAction = 0;
+            _fallbackCachedState = null; _nextFallbackStateRefresh = 0f; return true;
+        }
+        internal bool RequestControlClear() { _pendingControlAction = 1; _pendingControlSelection = null; _pendingControlSelectionAutomatic = false; _fallbackCachedState = null; _nextFallbackStateRefresh = 0f; return true; }
+        internal bool RequestControlConfirm() { _pendingControlAction = 2; _pendingControlSelection = null; _pendingControlSelectionAutomatic = false; _fallbackCachedState = null; _nextFallbackStateRefresh = 0f; return true; }
+        internal bool RequestControlCancelPending() { _pendingControlAction = 3; _pendingControlSelection = null; _pendingControlSelectionAutomatic = false; _fallbackCachedState = null; _nextFallbackStateRefresh = 0f; return true; }
 
         internal bool Handle(TypeText input, string raw)
         {

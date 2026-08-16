@@ -37,6 +37,7 @@ namespace ErenshorNemesis
         private static int ContextGeneration, VoiceToken;
         private static bool Stopping, LastLevelCompatible = true, PendingDisable;
         private static string PendingSelection = "";
+        private static NemesisSelectionOrigin PendingSelectionOrigin = NemesisSelectionOrigin.Explicit;
         private static float PendingExpires;
         private static float NextCheck, NextTaunt, NextAmbush, NextResultPoll, SaveAt, CompatibilityChangeAt;
         private static bool Dirty;
@@ -163,6 +164,17 @@ namespace ErenshorNemesis
             internal bool Settled;
         }
 
+        private sealed class CandidateBuckets
+        {
+            internal readonly List<SimPlayerTracking> Explicit = new List<SimPlayerTracking>();
+            internal readonly List<SimPlayerTracking> Automatic = new List<SimPlayerTracking>();
+            internal readonly List<SimPlayerTracking> Primary = new List<SimPlayerTracking>();
+            internal readonly List<SimPlayerTracking> GuildFallback = new List<SimPlayerTracking>();
+            internal readonly List<SimPlayerTracking> ExplicitFriends = new List<SimPlayerTracking>();
+            internal bool FriendAuthorityKnown;
+            internal bool GuildAuthorityKnown;
+        }
+
         internal static void Initialize(NemesisSettings settings, NemesisStateStore state, INemesisLog log)
         {
             Settings = settings; State = state; Log = log;
@@ -216,8 +228,9 @@ namespace ErenshorNemesis
             if (arg.Equals("candidates", StringComparison.OrdinalIgnoreCase)) { Say(CandidateText()); return; }
             if (arg.Equals("random", StringComparison.OrdinalIgnoreCase))
             {
-                List<SimPlayerTracking> list = Candidates();
-                if (list.Count == 0) Say("[Nemesis] No eligible Sims found."); else Select(list[UnityEngine.Random.Range(0, list.Count)].SimName);
+                List<SimPlayerTracking> list = AutomaticCandidates();
+                if (list.Count == 0) Say("[Nemesis] No safe automatic candidates are available. Use /enemesis candidates for details.");
+                else SelectResolved(list[UnityEngine.Random.Range(0, list.Count)], NemesisSelectionOrigin.Automatic);
                 return;
             }
             if (arg.StartsWith("select ", StringComparison.OrdinalIgnoreCase)) { Select(arg.Substring(7).Trim()); return; }
@@ -331,14 +344,35 @@ namespace ErenshorNemesis
 
         private static void Select(string requested)
         {
-            SimPlayerTracking match = Candidates().FirstOrDefault(x => string.Equals(x.SimName, requested, StringComparison.OrdinalIgnoreCase));
-            if (match == null) { Say("[Nemesis] '" + Clean(requested, 40) + "' is not an eligible same-level, non-party Sim. Use /enemesis candidates."); return; }
+            SimPlayerTracking match = ExplicitCandidates().FirstOrDefault(x => string.Equals(x.SimName, requested, StringComparison.OrdinalIgnoreCase));
+            if (match == null) { Say("[Nemesis] '" + Clean(requested, 40) + "' is not eligible for deliberate selection. Use /enemesis candidates."); return; }
+            SelectResolved(match, NemesisSelectionOrigin.Explicit);
+        }
+
+        // Automatic selection carries its social policy into confirmation. A Sim that becomes a
+        // native Friend after the random roll but before confirmation can never slip through the
+        // explicit-Friend exception.
+        private static void SelectResolved(SimPlayerTracking match, NemesisSelectionOrigin origin)
+        {
+            if (match == null) return;
+            if (origin == NemesisSelectionOrigin.Automatic)
+            {
+                SimPlayerTracking current = AutomaticCandidates().FirstOrDefault(x =>
+                    x != null && string.Equals(x.SimName, match.SimName, StringComparison.OrdinalIgnoreCase));
+                if (current == null)
+                {
+                    Say("[Nemesis] That automatic candidate is no longer eligible. Nothing changed.");
+                    return;
+                }
+                match = current;
+            }
+
             // Re-running select on the current Nemesis must never be the way a record is wiped.
             if (HasNemesis() && string.Equals(Name.Value, match.SimName, StringComparison.OrdinalIgnoreCase))
             { Say("[Nemesis] " + match.SimName + " is already your Nemesis. Record kept: " + RecordText() + "."); return; }
             if (IsEstablished())
             {
-                PendingSelection = match.SimName; PendingDisable = false;
+                PendingSelection = match.SimName; PendingDisable = false; PendingSelectionOrigin = origin;
                 PendingExpires = Time.unscaledTime + 60f;
                 Say("[Nemesis] Replacing " + Name.Value + " permanently discards " + RecordText() +
                     ". Use /enemesis confirm within 60 seconds to replace with " + match.SimName + ", or /enemesis cancel.");
@@ -375,7 +409,7 @@ namespace ErenshorNemesis
             if (!HasNemesis()) { Say("[Nemesis] No Nemesis is selected."); return; }
             if (IsEstablished() && PendingSelection.Length == 0 && !PendingDisable)
             {
-                PendingDisable = true; PendingSelection = "";
+                PendingDisable = true; PendingSelection = ""; PendingSelectionOrigin = NemesisSelectionOrigin.Explicit;
                 PendingExpires = Time.unscaledTime + 60f;
                 Say("[Nemesis] " + Name.Value + " has " + RecordText() +
                     ". Use /enemesis confirm within 60 seconds to stop the rivalry, or /enemesis cancel. The record is kept and selecting " +
@@ -399,7 +433,11 @@ namespace ErenshorNemesis
             if (!HasPendingChange()) { Say("[Nemesis] Nothing is waiting for confirmation."); return; }
             if (PendingDisable) { ApplyDisable(); return; }
             string requested = PendingSelection;
-            SimPlayerTracking match = Candidates().FirstOrDefault(x => string.Equals(x.SimName, requested, StringComparison.OrdinalIgnoreCase));
+            NemesisSelectionOrigin origin = PendingSelectionOrigin;
+            // Confirmation revalidates under the policy that created the pending change. Explicit
+            // selection deliberately permits native Friends; automatic/random selection never does.
+            List<SimPlayerTracking> eligible = origin == NemesisSelectionOrigin.Automatic ? AutomaticCandidates() : ExplicitCandidates();
+            SimPlayerTracking match = eligible.FirstOrDefault(x => string.Equals(x.SimName, requested, StringComparison.OrdinalIgnoreCase));
             ClearPendingChange();
             if (match == null) { Say("[Nemesis] " + Clean(requested, 40) + " is no longer eligible. Nothing changed."); return; }
             ApplySelection(match);
@@ -421,33 +459,94 @@ namespace ErenshorNemesis
             if (now <= PendingExpires) return true;
             ClearPendingChange(); return false;
         }
-        private static void ClearPendingChange() { PendingSelection = ""; PendingDisable = false; PendingExpires = 0f; }
+        private static void ClearPendingChange() { PendingSelection = ""; PendingDisable = false; PendingSelectionOrigin = NemesisSelectionOrigin.Explicit; PendingExpires = 0f; }
         private static string RecordText()
         {
             return Wins.Value + "W/" + Losses.Value + "L over " + VerifiedFights() + " verified " +
                 (VerifiedFights() == 1 ? "fight" : "fights") + " and " + GrudgePoints() + " grudge points";
         }
 
-        // Eligibility is social selection only. PvP separately refuses anyone still present in the
-        // zone, so a same-zone Sim can be a social rival but never becomes an off-map PvP clone.
-        private static List<SimPlayerTracking> Candidates()
+        // Base actor safety is separate from social policy. Explicit player selection may deliberately
+        // choose a native Friend, but random/automatic selection requires authoritative Friends +
+        // Guild state and always excludes Friends.
+        private static CandidateBuckets CandidateSnapshot()
         {
-            List<SimPlayerTracking> result = new List<SimPlayerTracking>();
-            if (!Ready() || GameData.SimMngr == null || GameData.SimMngr.Sims == null) return result;
-            int level = PlayerLevel(); if (level <= 0) return result;
+            CandidateBuckets buckets = new CandidateBuckets();
+            if (!Ready() || GameData.SimMngr == null || GameData.SimMngr.Sims == null) return buckets;
+            int level = PlayerLevel(); if (level <= 0) return buckets;
+
             HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             excluded.Add(PlayerName());
-            try { if (GameData.GroupMembers != null) foreach (SimPlayerTracking member in GameData.GroupMembers) if (member != null && !string.IsNullOrWhiteSpace(member.SimName)) excluded.Add(member.SimName); } catch { }
-            // Your own characters in other save slots are never rivals of this character.
-            try { if (GameData.SaveSlots != null) foreach (SaveGameData slot in GameData.SaveSlots) if (slot != null && !string.IsNullOrWhiteSpace(slot.CharName)) excluded.Add(slot.CharName.Trim()); } catch { }
+            try
+            {
+                if (GameData.GroupMembers != null)
+                    foreach (SimPlayerTracking member in GameData.GroupMembers)
+                        if (member != null && !string.IsNullOrWhiteSpace(member.SimName)) excluded.Add(member.SimName);
+            }
+            catch { }
+            // Your own characters in every save slot are never rivals of this character.
+            try
+            {
+                if (GameData.SaveSlots != null)
+                    foreach (SaveGameData slot in GameData.SaveSlots)
+                        if (slot != null && !string.IsNullOrWhiteSpace(slot.CharName)) excluded.Add(slot.CharName.Trim());
+            }
+            catch { }
+
+            int currentSlot;
+            buckets.FriendAuthorityKnown = NemesisNativeSocialRoster.TryCurrentCharacterSlot(out currentSlot);
+            NemesisGuildRosterSnapshot guild = NemesisNativeSocialRoster.ReadCurrentGuild(PlayerName());
+            buckets.GuildAuthorityKnown = guild != null && guild.Known;
+
             int range = Clamp(LevelRange.Value, 1, 10);
+            List<NemesisCandidateFact> facts = new List<NemesisCandidateFact>();
+            Dictionary<string, SimPlayerTracking> byName = new Dictionary<string, SimPlayerTracking>(StringComparer.OrdinalIgnoreCase);
+
             foreach (SimPlayerTracking sim in GameData.SimMngr.Sims)
             {
                 if (!EligibleSim(sim, level, range, excluded)) continue;
-                result.Add(sim);
+                string candidateName = (sim.SimName ?? string.Empty).Trim();
+                if (candidateName.Length == 0 || byName.ContainsKey(candidateName)) continue;
+
+                bool isFriend = false;
+                bool friendKnown = buckets.FriendAuthorityKnown &&
+                    NemesisNativeSocialRoster.TryIsFriend(sim, currentSlot, out isFriend);
+
+                NemesisCandidateFact fact = new NemesisCandidateFact();
+                fact.Name = candidateName;
+                fact.LevelDistance = Math.Abs(sim.Level - level);
+                fact.BaseEligible = true;
+                fact.FriendKnown = friendKnown;
+                fact.IsFriend = friendKnown && isFriend;
+                fact.GuildKnown = buckets.GuildAuthorityKnown;
+                fact.IsGuildMember = buckets.GuildAuthorityKnown && guild.Members.Contains(candidateName);
+                facts.Add(fact);
+                byName[candidateName] = sim;
             }
-            return result.OrderBy(x => Math.Abs(x.Level - level)).ThenBy(x => x.SimName, StringComparer.OrdinalIgnoreCase).Take(30).ToList();
+
+            AddResolved(buckets.Explicit, NemesisCandidateSelectionPolicy.OrderedExplicitCandidates(facts), byName, 30);
+            AddResolved(buckets.Primary, NemesisCandidateSelectionPolicy.OrderedPool(facts, NemesisAutomaticPool.Primary), byName, 30);
+            AddResolved(buckets.GuildFallback, NemesisCandidateSelectionPolicy.OrderedPool(facts, NemesisAutomaticPool.GuildFallback), byName, 30);
+            AddResolved(buckets.Automatic, NemesisCandidateSelectionPolicy.OrderedAutomaticCandidates(facts), byName, 30);
+            AddResolved(buckets.ExplicitFriends, NemesisCandidateSelectionPolicy.OrderedExplicitFriends(facts), byName, 30);
+            return buckets;
         }
+
+        private static void AddResolved(List<SimPlayerTracking> target, List<NemesisCandidateFact> facts,
+            Dictionary<string, SimPlayerTracking> byName, int limit)
+        {
+            if (target == null || facts == null || byName == null) return;
+            for (int i = 0; i < facts.Count && target.Count < limit; i++)
+            {
+                NemesisCandidateFact fact = facts[i];
+                SimPlayerTracking sim;
+                if (fact != null && !string.IsNullOrWhiteSpace(fact.Name) && byName.TryGetValue(fact.Name, out sim) && sim != null)
+                    target.Add(sim);
+            }
+        }
+
+        private static List<SimPlayerTracking> ExplicitCandidates() { return CandidateSnapshot().Explicit; }
+        private static List<SimPlayerTracking> AutomaticCandidates() { return CandidateSnapshot().Automatic; }
 
         private static bool EligibleSim(SimPlayerTracking sim, int playerLevel, int range, HashSet<string> excluded)
         {
@@ -825,7 +924,27 @@ namespace ErenshorNemesis
         internal static string ControlNemesisName() { return HasNemesis() ? Name.Value : null; }
         internal static int ControlGrudgePoints() { return HasNemesis() ? GrudgePoints() : 0; }
         internal static string ControlRecordText() { return HasNemesis() ? RecordText() : null; }
-        internal static string[] ControlCandidateNames() { return Candidates().Select(x => x.SimName).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray(); }
+        // CandidateNames remains the explicit-selection transport list for compatibility. Control
+        // presentation takes one native social snapshot so a retained panel refresh cannot scan the
+        // Sim/Guild rosters six times in one frame.
+        internal static NemesisCandidateControlSnapshot ControlCandidateSnapshot()
+        {
+            CandidateBuckets buckets = CandidateSnapshot();
+            NemesisCandidateControlSnapshot value = new NemesisCandidateControlSnapshot();
+            value.CandidateNames = CandidateNames(buckets.Explicit);
+            value.AutomaticCandidateNames = CandidateNames(buckets.Automatic);
+            value.PrimaryAutomaticCandidateNames = CandidateNames(buckets.Primary);
+            value.GuildFallbackCandidateNames = CandidateNames(buckets.GuildFallback);
+            value.ExplicitFriendCandidateNames = CandidateNames(buckets.ExplicitFriends);
+            value.CandidatePresentation = CandidatePanelText(buckets);
+            return value;
+        }
+
+        private static string[] CandidateNames(List<SimPlayerTracking> values)
+        {
+            if (values == null || values.Count == 0) return new string[0];
+            return values.Select(x => x == null ? null : x.SimName).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+        }
         internal static string ControlStatus() { return Status(); }
         internal static bool ControlHasPendingChange() { return HasPendingChange(); }
         internal static string ControlPendingChangeText()
@@ -837,6 +956,15 @@ namespace ErenshorNemesis
         {
             if (!Ready() || string.IsNullOrWhiteSpace(requested)) return false;
             Select(requested.Trim());
+            return true;
+        }
+        internal static bool ControlSelectAutomatic(string requested)
+        {
+            if (!Ready() || string.IsNullOrWhiteSpace(requested)) return false;
+            SimPlayerTracking match = AutomaticCandidates().FirstOrDefault(x =>
+                x != null && string.Equals(x.SimName, requested.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (match == null) return false;
+            SelectResolved(match, NemesisSelectionOrigin.Automatic);
             return true;
         }
         internal static bool ControlClear()
@@ -900,10 +1028,73 @@ namespace ErenshorNemesis
         }
         private static string CandidateText()
         {
-            List<SimPlayerTracking> list = Candidates();
-            return list.Count == 0 ? "[Nemesis] No eligible candidates." : "[Nemesis] Candidates: " +
-                string.Join(", ", list.Take(10).Select(x => x.SimName + " L" + x.Level + " " + (x.ClassName ?? "Unknown")).ToArray()) +
-                (list.Count > 10 ? " ..." : "");
+            return CandidateText(CandidateSnapshot());
+        }
+
+        private static string CandidateText(CandidateBuckets buckets)
+        {
+            if (buckets == null) buckets = new CandidateBuckets();
+            List<string> lines = new List<string>();
+
+            if (!buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
+                lines.Add("AUTO: waiting for authoritative native " +
+                    (!buckets.FriendAuthorityKnown && !buckets.GuildAuthorityKnown ? "Friends + Guild state" :
+                     !buckets.FriendAuthorityKnown ? "Friends state" : "Guild state"));
+            else if (buckets.Primary.Count > 0)
+                lines.Add("AUTO: " + FormatCandidates(buckets.Primary, 5));
+            else if (buckets.GuildFallback.Count > 0)
+                lines.Add("GUILD FALLBACK: " + FormatCandidates(buckets.GuildFallback, 5));
+            else
+                lines.Add("AUTO: no eligible non-Friend candidates");
+
+            if (buckets.ExplicitFriends.Count > 0)
+                lines.Add("FRIENDS - explicit /enemesis select only: " + FormatCandidates(buckets.ExplicitFriends, 4));
+
+            int explicitOther = buckets.Explicit.Count - buckets.ExplicitFriends.Count;
+            if (explicitOther > 0 && buckets.Primary.Count == 0 && buckets.GuildFallback.Count == 0)
+                lines.Add("OTHER EXPLICIT: " + FormatCandidates(buckets.Explicit.Where(x => !ContainsCandidate(buckets.ExplicitFriends, x == null ? null : x.SimName)).ToList(), 4));
+
+            return "[Nemesis] Candidates\n" + string.Join("\n", lines.ToArray());
+        }
+
+        private static string CandidatePanelText(CandidateBuckets buckets)
+        {
+            if (buckets == null) return "AUTO: unavailable";
+            List<string> lines = new List<string>();
+            if (!buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
+                lines.Add("AUTO: waiting for native Friends/Guild state");
+            else if (buckets.Primary.Count > 0)
+                lines.Add("AUTO: " + FormatCandidates(buckets.Primary, 3));
+            else if (buckets.GuildFallback.Count > 0)
+                lines.Add("AUTO • GUILD FALLBACK: " + FormatCandidates(buckets.GuildFallback, 3));
+            else
+                lines.Add("AUTO: no eligible non-Friend candidates");
+
+            if (buckets.ExplicitFriends.Count > 0)
+                lines.Add("FRIENDS • explicit only: " + FormatCandidates(buckets.ExplicitFriends, 2));
+            return string.Join("\n", lines.ToArray());
+        }
+
+        private static bool ContainsCandidate(List<SimPlayerTracking> list, string name)
+        {
+            if (list == null || string.IsNullOrWhiteSpace(name)) return false;
+            for (int i = 0; i < list.Count; i++)
+                if (list[i] != null && string.Equals(list[i].SimName, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static string FormatCandidates(List<SimPlayerTracking> list, int limit)
+        {
+            if (list == null || list.Count == 0) return "none";
+            int count = Math.Min(Math.Max(1, limit), list.Count);
+            string[] values = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                SimPlayerTracking sim = list[i];
+                values[i] = sim == null ? "unknown" :
+                    Clean(sim.SimName, 28) + " L" + sim.Level + " " + Clean(sim.ClassName ?? "Unknown", 18);
+            }
+            return string.Join(" | ", values) + (list.Count > count ? " | +" + (list.Count - count) + " more" : string.Empty);
         }
         private static string Diagnose()
         {
@@ -921,7 +1112,8 @@ namespace ErenshorNemesis
                 "; zone_armed=" + (ZoneEntryAt > 0f ? ZoneEntryScene + " in " + Countdown(ZoneEntryAt) : "none") +
                 "; recent_zones=" + (RecentZones.Count == 0 ? "none" : string.Join(",", RecentZones.ToArray())) +
                 "; pending_voice=" + Pending.Count + "; processed_results=" + ProcessedCache.Count +
-                "; candidates=" + Candidates().Count + "; scene=" + SceneName() + "; pvp=" + PvpBridge.Status() +
+                "; automatic_candidates=" + AutomaticCandidates().Count + "; explicit_candidates=" + ExplicitCandidates().Count +
+                "; scene=" + SceneName() + "; pvp=" + PvpBridge.Status() +
                 "; deep_sims_bridge=" + DeepSimsBridge.Available + "; llm_voice=" + (UseLlmVoice != null && UseLlmVoice.Value) + ".";
         }
 

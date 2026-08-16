@@ -6,13 +6,16 @@ if (-not $LunarisLibDir) { $LunarisLibDir = Join-Path $ScriptRoot "LunarisLibs" 
 if (-not (Test-Path (Join-Path $LunarisLibDir "Lunaris.dll")) -or -not (Test-Path (Join-Path $LunarisLibDir "0Harmony.dll"))) { throw "Pass -LunarisLibDir pointing to a folder with Lunaris.dll and 0Harmony.dll." }
 $managed = Join-Path $GameDir "Erenshor_Data\Managed"; $pluginRoot = Join-Path $GameDir "plugins"
 New-Item -ItemType Directory -Force -Path $pluginRoot | Out-Null
-$refs = @((Join-Path $LunarisLibDir "Lunaris.dll"),(Join-Path $LunarisLibDir "0Harmony.dll"),(Join-Path $managed "Assembly-CSharp.dll"),(Join-Path $managed "netstandard.dll"),(Join-Path $managed "UnityEngine.dll"),(Join-Path $managed "UnityEngine.CoreModule.dll"),(Join-Path $managed "UnityEngine.UI.dll"))
+$refs = @((Join-Path $LunarisLibDir "Lunaris.dll"),(Join-Path $LunarisLibDir "0Harmony.dll"),(Join-Path $managed "Assembly-CSharp.dll"),(Join-Path $managed "netstandard.dll"),(Join-Path $managed "UnityEngine.dll"),(Join-Path $managed "UnityEngine.CoreModule.dll"),(Join-Path $managed "UnityEngine.UIModule.dll"),(Join-Path $managed "UnityEngine.TextRenderingModule.dll"),(Join-Path $managed "UnityEngine.UI.dll"))
 foreach ($ref in $refs) { if (-not (Test-Path $ref)) { throw "Missing reference: $ref" } }
 $TempDir = Join-Path $env:TEMP ("ErenshorNemesis-build-" + [Guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 $TempDll = Join-Path $TempDir "ErenshorNemesis.dll"; $rsp = Join-Path $TempDir "ErenshorNemesis.rsp"; $out = Join-Path $pluginRoot "ErenshorNemesis.dll"
 try {
     $lines = @('/nologo','/target:library','/optimize+',('/out:"{0}"' -f $TempDll))
     $refs | ForEach-Object { $lines += ('/reference:"{0}"' -f $_) }; Get-ChildItem (Join-Path $ScriptRoot "src") -Filter "*.cs" | ForEach-Object { $lines += ('"' + $_.FullName + '"') }
+    $fallbackUi = Join-Path (Split-Path -Parent (Split-Path -Parent $ScriptRoot)) "Erenshor-Mod-Suite\shared\ErenshorSuite.UI\StandaloneFallbackUi.cs"
+    if (-not (Test-Path -LiteralPath $fallbackUi)) { throw "Missing shared standalone UI source: $fallbackUi" }
+    $lines += ('"' + $fallbackUi + '"')
     # Cross-mod contract conformance tests, shared with Erenshor PvP and Deep Sims. Optional so a
     # standalone copy of this mod still builds; the self-test simply covers less without it.
     $shared = Join-Path (Split-Path -Parent $ScriptRoot) "shared"

@@ -52,14 +52,18 @@ namespace ErenshorNemesis
 
         private string Describe()
         {
-            string status = NemesisControlApi.GetStatus();
+            NemesisControlState state = NemesisControlApi.GetBasicState();
+            string status = NemesisHubPresentation.Build(state.Enabled, state.HasNemesis, state.NemesisName,
+                state.GrudgePoints, state.Record, state.HasPendingConfirmation,
+                state.AutomaticCandidateNames == null ? 0 : state.AutomaticCandidateNames.Length);
             return "protocol=1"
                 + "&module=" + NemesisControlApi.ModuleId
                 + "&display=" + Uri.EscapeDataString("Nemesis")
                 + "&version=" + Uri.EscapeDataString(ErenshorNemesisPlugin.PluginVersion)
                 + "&status=" + Uri.EscapeDataString(status)
-                + "&candidateCount=" + ((NemesisControlApi.GetBasicState().CandidateNames ?? Array.Empty<string>()).Length)
-                + "&actions=select,clear,confirm,cancel";
+                + "&candidateCount=" + ((state.AutomaticCandidateNames ?? new string[0]).Length)
+                + "&explicitCandidateCount=" + ((state.CandidateNames ?? new string[0]).Length)
+                + "&actions=openPanel,closePanel,select,clear,confirm,cancel";
         }
 
         private string BasicSettings()
@@ -103,12 +107,16 @@ namespace ErenshorNemesis
             // are unchanged here.
             switch (actionId)
             {
+                case "openPanel": return NemesisControlApi.OpenPanel() ? "ok" : "rejected";
+                case "closePanel": return NemesisControlApi.ClosePanel() ? "ok" : "rejected";
                 case "select":
                 {
                     string requested = (argument ?? string.Empty).Trim();
                     if (requested.Length == 0) return "rejected: missing candidate name";
-                    // Revalidate the candidate name against the mod's real current candidate list
-                    // before queuing the request - NemesisDirector.Select() would also refuse an
+                    // Revalidate against the explicit-selection list before queuing. This
+                    // deliberately allows a native Friend selected by name, while automatic/random
+                    // selection uses the stricter automatic list.
+                    // NemesisDirector.Select() would also refuse an
                     // ineligible name, but we reject early here so the caller gets a clear result
                     // instead of a silently-dropped request.
                     string[] candidates = NemesisControlApi.GetBasicState().CandidateNames ?? Array.Empty<string>();

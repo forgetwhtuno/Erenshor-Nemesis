@@ -1,5 +1,17 @@
+using ForgottenRoads.StandaloneUi;
+
 namespace ErenshorNemesis
 {
+    internal sealed class NemesisCandidateControlSnapshot
+    {
+        internal string[] CandidateNames = new string[0];
+        internal string[] AutomaticCandidateNames = new string[0];
+        internal string[] PrimaryAutomaticCandidateNames = new string[0];
+        internal string[] GuildFallbackCandidateNames = new string[0];
+        internal string[] ExplicitFriendCandidateNames = new string[0];
+        internal string CandidatePresentation = string.Empty;
+    }
+
     public sealed class NemesisControlState
     {
         public bool GameplayReady;
@@ -7,7 +19,13 @@ namespace ErenshorNemesis
         public string NemesisName;
         public int GrudgePoints;
         public string Record;
+        // Explicit selection candidates include deliberate native-Friend choices.
         public string[] CandidateNames;
+        public string[] AutomaticCandidateNames;
+        public string[] PrimaryAutomaticCandidateNames;
+        public string[] GuildFallbackCandidateNames;
+        public string[] ExplicitFriendCandidateNames;
+        public string CandidatePresentation;
         public bool HasPendingConfirmation;
         public string PendingConfirmation;
         public string Status;
@@ -22,11 +40,12 @@ namespace ErenshorNemesis
     {
         public const int ApiVersion = 1;
         public const string ModuleId = "nemesis";
-        public static bool HasDedicatedPanel { get { return false; } }
-        public static bool IsPanelOpen { get { return false; } }
+        public static bool HasDedicatedPanel { get { return true; } }
+        public static bool IsPanelOpen { get { return StandaloneFallbackUi.IsOpen; } }
 
         public static NemesisControlState GetBasicState()
         {
+            NemesisCandidateControlSnapshot candidates = NemesisDirector.ControlCandidateSnapshot();
             return new NemesisControlState
             {
                 GameplayReady = NemesisDirector.ControlReady(),
@@ -34,7 +53,12 @@ namespace ErenshorNemesis
                 NemesisName = NemesisDirector.ControlNemesisName(),
                 GrudgePoints = NemesisDirector.ControlGrudgePoints(),
                 Record = NemesisDirector.ControlRecordText(),
-                CandidateNames = NemesisDirector.ControlCandidateNames(),
+                CandidateNames = candidates.CandidateNames,
+                AutomaticCandidateNames = candidates.AutomaticCandidateNames,
+                PrimaryAutomaticCandidateNames = candidates.PrimaryAutomaticCandidateNames,
+                GuildFallbackCandidateNames = candidates.GuildFallbackCandidateNames,
+                ExplicitFriendCandidateNames = candidates.ExplicitFriendCandidateNames,
+                CandidatePresentation = candidates.CandidatePresentation,
                 HasPendingConfirmation = NemesisDirector.ControlHasPendingChange(),
                 PendingConfirmation = NemesisDirector.ControlPendingChangeText(),
                 Status = NemesisDirector.ControlStatus(),
@@ -48,7 +72,8 @@ namespace ErenshorNemesis
         public static string GetStatus()
         {
             NemesisControlState s = GetBasicState();
-            return NemesisHubPresentation.Build(s.Enabled, s.HasNemesis, s.NemesisName, s.GrudgePoints, s.Record, s.HasPendingConfirmation, s.CandidateNames == null ? 0 : s.CandidateNames.Length);
+            return NemesisHubPresentation.Build(s.Enabled, s.HasNemesis, s.NemesisName, s.GrudgePoints, s.Record, s.HasPendingConfirmation,
+                s.AutomaticCandidateNames == null ? 0 : s.AutomaticCandidateNames.Length);
         }
         public static bool SetEnabled(bool value) { return SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlSetEnabled(value); }
         public static bool SetNaturalAmbushes(bool value) { return SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlSetNaturalAmbushes(value); }
@@ -64,7 +89,12 @@ namespace ErenshorNemesis
         public static bool TrySelect(string simName)
         {
             ErenshorNemesisPlugin p = ErenshorNemesisPlugin.Instance;
-            return p != null && SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlReady() && p.RequestControlSelect(simName);
+            return p != null && SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlReady() && p.RequestControlSelect(simName, false);
+        }
+        internal static bool TrySelectAutomatic(string simName)
+        {
+            ErenshorNemesisPlugin p = ErenshorNemesisPlugin.Instance;
+            return p != null && SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlReady() && p.RequestControlSelect(simName, true);
         }
         public static bool TryClear()
         {
@@ -81,7 +111,7 @@ namespace ErenshorNemesis
             ErenshorNemesisPlugin p = ErenshorNemesisPlugin.Instance;
             return p != null && SuiteUiPolicy.IsGameplayReady() && NemesisDirector.ControlHasPendingChange() && p.RequestControlCancelPending();
         }
-        public static bool OpenPanel() { return false; }
-        public static bool ClosePanel() { return false; }
+        public static bool OpenPanel() { return StandaloneFallbackUi.Open(); }
+        public static bool ClosePanel() { return StandaloneFallbackUi.Close(); }
     }
 }
