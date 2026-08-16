@@ -1,4 +1,6 @@
-# Erenshor Nemesis
+# Forgotten Roads: Nemesis
+
+Part of the **Forgotten Roads for Erenshor** mod collection.
 
 A standalone persistent rival system for Erenshor. It works without Deep Sims or an LLM and never edits an Erenshor save.
 
