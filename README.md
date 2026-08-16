@@ -4,6 +4,13 @@ Part of the **Forgotten Roads for Erenshor** mod collection.
 
 A standalone persistent rival system for Erenshor. It works without Deep Sims or an LLM and never edits an Erenshor save.
 
+## Candidate selection
+
+Automatic selection fails closed when native Friends or Guild state is unknown. It never chooses a Friend,
+prefers eligible Sims who are neither Friends nor guildmates, and falls back to an eligible guildmate only
+when no preferred candidate exists. An explicit `/enemesis select <Sim name>` may deliberately choose a Friend;
+that player-directed choice is kept separate from automatic selection policy.
+
 ## Implemented in 0.2.0
 
 - One explicitly selected Nemesis per player character, persisted in a mod-owned sidecar file (`plugins/config/ErenshorNemesis/nemesis-state.dat`) and keyed from the verified save-slot index plus the character name, so two slots sharing a name keep separate rivalries. Data written by 0.1.0 under the name-only key is migrated once.
@@ -132,10 +139,10 @@ This version requires **native Lunaris** — BepInEx is no longer required. `BUI
 This is an unofficial, community-made mod for Erenshor and is not affiliated with or endorsed by the game's developer.
 
 
-## Optional Suite Hub integration
+## Optional Forgotten Roads Hub integration
 
-Erenshor Suite Hub is **optional**. Nemesis exposes a versioned `NemesisControlApi`/Aura surface without referencing Hub types or assuming Hub load order. Hub can render concise rival status and the safe user-facing settings now exposed through `settings.basic`/`settings.advanced`: Nemesis enabled, natural ambush requests, zone-entry rivalry lines, Deep Sims notification, and optional LLM rivalry voice.
+Forgotten Roads Hub is **optional**. Nemesis exposes a versioned `NemesisControlApi`/Aura surface without referencing Hub types or assuming Hub load order. Hub can render concise rival status and the safe user-facing settings now exposed through `settings.basic`/`settings.advanced`: Nemesis enabled, natural ambush requests, zone-entry rivalry lines, Deep Sims notification, and optional LLM rivalry voice.
 
 Nemesis intentionally has no dedicated module panel or floating launcher; `/enemesis` remains the complete standalone command surface. Selection/clear/confirm/cancel actions continue through the existing deferred Nemesis state machine, including established-rival confirmation semantics and persistent record protection.
 
-The current Suite Hub renderer can transport two-argument actions but does not yet render arbitrary argument-entry/action controls on a module page. The provider therefore advertises `select(name)`, `clear`, `confirm`, and `cancel` over Aura without fabricating candidate state or modifying Hub in this workstream.
+The current Forgotten Roads Hub renderer can transport two-argument actions but does not yet render arbitrary argument-entry/action controls on a module page. The provider therefore advertises `select(name)`, `clear`, `confirm`, and `cancel` over Aura without fabricating candidate state or modifying Hub in this workstream.
