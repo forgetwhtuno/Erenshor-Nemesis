@@ -10,7 +10,7 @@ namespace ErenshorNemesis
         {
             string status;
             if (!enabled) status = "Disabled";
-            else if (!hasNemesis) status = "No rival | " + Math.Max(0, candidateCount) + " candidate(s)";
+            else if (!hasNemesis) status = "Awaiting Rival | " + Math.Max(0, candidateCount) + " candidate(s)";
             else
             {
                 status = "Rival: " + Clean(name, 42) + " | grudge " + Math.Max(0, grudge);

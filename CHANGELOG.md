@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 - Automatic Rival / Two-Way Conversation / Native Chat
+
+- Automatically assigns one valid rival after authoritative character/social state is ready; no normal-play `candidates`/`select` setup is required.
+- Persists stable `SimPlayerTracking.simIndex` identity with display-name fallback and upgrades legacy name-only assignments without rerolling them.
+- Distinguishes temporary roster unavailability from sustained authoritative invalidity before replacing a saved rival.
+- Added `/enemesis reroll` (`random` remains an alias) while preserving manual selection, established-rival confirmation, and per-character stop/resume behavior.
+- Added exact-current-name natural reply routing plus `/enemesis reply`; unrelated party/local chat is not consumed.
+- Orders Nemesis chat ownership before Deep Sims to prevent one addressed line from producing both a Nemesis response and an ordinary party-Sim response.
+- Added a six-line character-scoped HEARD rivalry thread; conversation never becomes verified fight history.
+- Reuses the existing optional Deep Sims `NemesisEventBridge.RequestNemesisLine(...)` path; Nemesis contains no Ollama client/model selection/residency.
+- Removed hardcoded `magenta` chat output. Visible lines contain no rich-text markup; Nemesis reuses a runtime-observed native tell color argument or safely falls back to one-argument `UpdateSocialLog.LogAdd(text)`.
+- Expanded bounded status/diagnostics and deterministic policy tests.
+
 ## Unreleased - Suite Hub control-surface refinement
 
 - Kept one-rival selection, grudge/cadence, verified-result, confirmation, and persistence behavior unchanged; no new standalone panel or launcher was added.
