@@ -4,13 +4,48 @@ Part of the **Forgotten Roads for Erenshor** mod collection.
 
 A standalone persistent rival system for Erenshor. It works without Deep Sims or an LLM and never edits an Erenshor save.
 
-## Implemented in 0.2.0
+**Standalone scope:** Nemesis selection, persistence, cadence, taunts/replies, zone-entry lines, and social rivalry work without any sibling mod. Actual rival fights are an optional PvP integration. Without Erenshor PvP installed there are no verified match results, so the social-only grudge contribution remains capped at 4 points and the rivalry stays in the `new` stage by design.
 
-- One explicitly selected Nemesis per player character, persisted in a mod-owned sidecar file (`plugins/config/ErenshorNemesis/nemesis-state.dat`) and keyed from the verified save-slot index plus the character name, so two slots sharing a name keep separate rivalries. Data written by 0.1.0 under the name-only key is migrated once.
+## Candidate selection
+
+Automatic selection fails closed when native Friends or Guild state is unknown. It never chooses a Friend,
+prefers eligible Sims who are neither Friends nor guildmates, and falls back to an eligible guildmate only
+when no preferred candidate exists. An explicit `/enemesis select <Sim name>` may deliberately choose a Friend;
+that player-directed choice is kept separate from automatic selection policy.
+
+## Implemented in 0.3.0
+
+- **Zero-command first run.** Once a player character and authoritative Sim/Friends/Guild state are ready, Nemesis selects from the existing automatic candidate policy and persists that rival. The picker uses a stable character-scoped hash over candidate identities rather than alphabetically choosing the first Sim.
+- **Persistent stable identity.** New assignments store `SimPlayerTracking.simIndex` plus display name fallback metadata. Existing 0.2.x name-only assignments are upgraded in place when their Sim can be resolved. A missing rival is retained as temporarily unavailable until an authoritative persistent roster has failed to resolve it repeatedly for at least 30 seconds.
+- **Manual override remains advanced control.** `/enemesis select <Sim>` persists a deliberate choice; `/enemesis reroll` (with `random` retained as an alias) requests another safe automatic candidate; `/enemesis disable` is a per-character opt-out and prevents immediate auto-reassignment.
+- **Natural two-way rivalry chat.** An exact current-rival address such as `Ariadne, keep talking.` (also accepted inside `/group` or `/p`) is owned by Nemesis, while unrelated party/local chat falls through untouched. `/enemesis reply <text>` uses the same path.
+- **Duplicate-response boundary.** Nemesis' `TypeText.CheckCommands` prefix is ordered before the current Deep Sims prefix. Once Nemesis accepts an exact-address line it clears/consumes the input, so Deep Sims cannot also schedule a generic party response for the same line.
+- **Bounded HEARD rivalry thread.** At most six short player/Nemesis lines persist per character as conversational context. They remain explicitly HEARD and never enter the verified PvP record.
+- **Optional Deep Sims voice, no second model.** Nemesis continues to call `ErenshorDeepSims.NemesisEventBridge.RequestNemesisLine(...)` by reflection. If Deep Sims is absent/refuses/fails/times out, deterministic Nemesis templates provide the bounded fallback.
+- **Native chat presentation.** Rival messages contain visible text only (`Ariadne tells you: ...`). Nemesis learns the actual runtime native incoming/outgoing tell color argument from vanilla `UpdateSocialLog.LogAdd(text, color)` traffic and supplies that separately. Until a safe native tell style has been observed it uses the one-argument native `LogAdd(text)` path instead of guessing a color token. Literal `<color=...>` is never embedded.
+- `/enemesis status` / `diagnose` now expose bounded assignment, identity availability, candidate count, Deep Sims availability, conversation state, and native chat-style status without private paths/prompts/account data.
+
+### Conversation ownership
+
+Nemesis consumes a normal player line only when the **current** rival's exact name starts the message and is immediately followed by directed punctuation (comma, colon, hyphen, or em dash). Examples:
+
+- `Ariadne, keep talking.` -> Nemesis reply route.
+- `/group Ariadne: we'll see.` -> Nemesis reply route, not generic Deep Sims party response.
+- `Dancer, what do you think?` -> not Nemesis-owned when Ariadne is the rival.
+- `/group anyone ready?` -> untouched.
+- `Ariadne is nearby.` -> untouched; a mere name mention is not strong enough.
+
+### Chat-color compatibility
+
+Erenshor's current chat sink still exposes `UpdateSocialLog.LogAdd(string text, string color)`, but the supplied current project demonstrates that guessed legacy color strings can leak rich-text markup on some builds. 0.3.0 therefore does not hardcode a Nemesis color name. It reuses a color value actually observed from vanilla tell traffic; color stays metadata and the message string stays markup-free. If no native tell color has been observed yet, it uses `LogAdd(text)` and favors correct/readable native presentation over inventing an unverified purple encoding.
+
+## Behavior retained from 0.2.0
+
+- One Nemesis per player character, persisted in a mod-owned sidecar file (`plugins/config/ErenshorNemesis/nemesis-state.dat`) and keyed from the verified save-slot index plus the character name, so two slots sharing a name keep separate rivalries. Data written by 0.1.0 under the name-only key is migrated once.
 - Same-level candidate discovery (default +/-3), excluding the current party, the player, the player's own characters in other save slots, GM/special Sims, tutorial Sims, remote co-op humans, and invalid or blank profiles. A same-zone Sim can be a social rival; PvP independently refuses to build an off-map party from anyone still present in the zone.
 - Expanded NPC-style template pools for designation, per-stage taunts, per-stage replies, player victory, Nemesis victory, player escape, Nemesis retreat, and ambush arrival. Lines stay good-natured and never invent shared history, loot, or combat details.
 - Bounded grudge stages (`new`, `rival`, `heated`) derived mainly from verified match results.
-- Persistent seeded dialogue variation: a fresh rivalry receives its own seed, each interaction advances the sequence, and neither the previous index nor the previous line repeats immediately even across a stage or pool change. Gameplay rolls (ambush opportunity, `random` selection) never use the dialogue seed.
+- Persistent seeded dialogue variation: a fresh rivalry receives its own seed, each interaction advances the sequence, and neither the previous index nor the previous line repeats immediately even across a stage or pool change. Gameplay rolls and automatic/reroll candidate selection never use the dialogue seed.
 - Restart-safe cadence. Taunt and ambush opportunity deadlines are stored as UTC timestamps, so restarting cannot reroll a pending timer or bring an encounter forward. A deadline that elapsed while logged out simply arrives on the next tick. No long blocking timers are used.
 - Live level compatibility checks. A Nemesis outside the configured range or currently in the player's party becomes dormant with a stated reason and wakes up on its own. It is never silently replaced.
 - Optional reflection-only PvP bridge (contract v2). The PvP mod independently requires PvP enabled, an allowed non-protected zone, an off-map eligible Nemesis, valid party scaling, cooldown availability, and a clear spawn area.
@@ -121,7 +156,7 @@ Natural ambushes default to a 20% base roll at opportunities 35-75 minutes apart
 
 This version requires **native Lunaris** — BepInEx is no longer required. `BUILD_AND_INSTALL.ps1` locates the current Erenshor install and the Lunaris developer reference, compiles, and installs only `ErenshorNemesis.dll` to `<Erenshor>\plugins\`. Lunaris manages enable/disable and the general settings (`[Nemesis]`, `[Ambush]`, `[Selection]`, `[Cadence]`). Per-character rivalry record/timestamps/dialogue-variety state live in their own mod-owned sidecar file, not in the Lunaris config UI — that data was never meant to be hand-edited as a "setting." A legacy BepInEx release remains available in this repository's Git history.
 
-**Status:** this native build compiles cleanly against the installed Lunaris/Assembly-CSharp. A new deterministic test (`tests/RUN_TESTS.ps1`) covers the new sidecar persistence store (round-trip, section isolation, escaping, legacy-key migration semantics) and passes. The mod's existing `/enemesis selftest` in-game self-check has not yet been run live in-game under Lunaris. Do not assume hot-reload safety until that pass is done.
+**Status:** the deterministic test suite (`tests/RUN_TESTS.ps1`) passes, including sidecar persistence, candidate selection, and control-policy coverage. A fresh native build and plugin-identity audit remain pending because the current Lunaris resolver is unavailable in this session. The mod's existing `/enemesis selftest` in-game self-check has not yet been run live under Lunaris. Do not assume hot-reload safety until that pass is done.
 
 ## Credits and Inspiration
 
@@ -129,17 +164,13 @@ This version requires **native Lunaris** — BepInEx is no longer required. `BUI
 
 - **[Erenshor COOP](https://github.com/MizukiBelhi/ErenshorCoop) by MizukiBelhi** — important technical reference and compatibility target for remote-human/networked-Sim detection. I have also tested against a locally updated copy for recent Erenshor and Deep Sims compatibility.
 
-## Development note
-
-This project has been developed heavily with AI-assisted coding tools. The goal has been to build features I wanted to use in Erenshor, with development guided through design, testing, playtesting, audits, and iteration against the game. Bug reports, code review, corrections, and contributions from experienced Erenshor modders are welcome.
-
 This is an unofficial, community-made mod for Erenshor and is not affiliated with or endorsed by the game's developer.
 
 
-## Optional Suite Hub integration
+## Optional Forgotten Roads Hub integration
 
-Erenshor Suite Hub is **optional**. Nemesis exposes a versioned `NemesisControlApi`/Aura surface without referencing Hub types or assuming Hub load order. Hub can render concise rival status and the safe user-facing settings now exposed through `settings.basic`/`settings.advanced`: Nemesis enabled, natural ambush requests, zone-entry rivalry lines, Deep Sims notification, and optional LLM rivalry voice.
+Forgotten Roads Hub is **optional**. Nemesis exposes a versioned `NemesisControlApi`/Aura surface without referencing Hub types or assuming Hub load order. Hub can render concise rival status and the safe user-facing settings now exposed through `settings.basic`/`settings.advanced`: Nemesis enabled, natural ambush requests, zone-entry rivalry lines, Deep Sims notification, and optional LLM rivalry voice.
 
 Nemesis intentionally has no dedicated module panel or floating launcher; `/enemesis` remains the complete standalone command surface. Selection/clear/confirm/cancel actions continue through the existing deferred Nemesis state machine, including established-rival confirmation semantics and persistent record protection.
 
-The current Suite Hub renderer can transport two-argument actions but does not yet render arbitrary argument-entry/action controls on a module page. The provider therefore advertises `select(name)`, `clear`, `confirm`, and `cancel` over Aura without fabricating candidate state or modifying Hub in this workstream.
+The current Forgotten Roads Hub renderer can transport two-argument actions but does not yet render arbitrary argument-entry/action controls on a module page. The provider therefore advertises `select(name)`, `clear`, `confirm`, and `cancel` over Aura without fabricating candidate state or modifying Hub in this workstream.

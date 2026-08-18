@@ -34,7 +34,7 @@ namespace ErenshorNemesis
         [Config("NotifyDeepSims", "Nemesis", "Let Deep Sims observe sanitized Nemesis events when installed.")]
         public bool NotifyDeepSims = true;
 
-        [Config("UseLlmVoice", "Nemesis", "When Deep Sims and Ollama are available, allow one guarded short LLM rivalry line; templates remain the fallback.")]
+        [Config("UseLlmVoice", "Nemesis", "When Deep Sims local inference is available, allow one guarded short rivalry line; templates remain the fallback.")]
         public bool UseLlmVoice = true;
 
         [Config("VoiceTimeoutSeconds", "Nemesis", "Seconds to wait for an optional generated line before the template is spoken instead, clamped to 4-60.")]
