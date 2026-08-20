@@ -58,6 +58,39 @@ namespace ErenshorNemesis
             return message.Length > 0;
         }
 
+        // A live standalone test showed a plain whisper to the Nemesis ("/t Ariadne hey") falling
+        // straight through to native Erenshor tell-handling instead of ever reaching Nemesis's own
+        // reply pipeline - the direct-address path above only recognizes party/group/local chat that
+        // starts with the exact name plus punctuation, and a "/" command other than /group or /p is
+        // refused before that check even runs. This mirrors the same targeted-command shape used
+        // elsewhere in this project for whisper detection (command target message), independently,
+        // so Nemesis has no dependency on any other mod for it. The target must match the CURRENT
+        // Nemesis's exact name - a whisper to any other Sim is refused and left untouched.
+        private static readonly string[] WhisperCommands = { "/whisper", "/tell", "/w", "/t" };
+
+        internal static bool TryExtractWhisperAddress(string rawText, string nemesisName, out string message)
+        {
+            message = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawText) || string.IsNullOrWhiteSpace(nemesisName)) return false;
+            string trimmed = rawText.Trim();
+            string matched = null;
+            for (int i = 0; i < WhisperCommands.Length; i++)
+            {
+                string command = WhisperCommands[i];
+                if (trimmed.Equals(command, StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith(command + " ", StringComparison.OrdinalIgnoreCase))
+                { matched = command; break; }
+            }
+            if (matched == null || trimmed.Length <= matched.Length) return false;
+            string rest = trimmed.Substring(matched.Length).Trim();
+            int firstSpace = rest.IndexOf(' ');
+            if (firstSpace <= 0 || firstSpace >= rest.Length - 1) return false;
+            string target = rest.Substring(0, firstSpace).Trim();
+            if (!string.Equals(target, nemesisName.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+            message = rest.Substring(firstSpace + 1).Trim();
+            return message.Length > 0;
+        }
+
         internal static void AddBounded(List<NemesisConversationLine> lines, bool fromPlayer, string text)
         {
             if (lines == null) return;

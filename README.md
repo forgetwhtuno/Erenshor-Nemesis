@@ -22,7 +22,7 @@ that player-directed choice is kept separate from automatic selection policy.
 - **Duplicate-response boundary.** Nemesis' `TypeText.CheckCommands` prefix is ordered before the current Deep Sims prefix. Once Nemesis accepts an exact-address line it clears/consumes the input, so Deep Sims cannot also schedule a generic party response for the same line.
 - **Bounded HEARD rivalry thread.** At most six short player/Nemesis lines persist per character as conversational context. They remain explicitly HEARD and never enter the verified PvP record.
 - **Optional Deep Sims voice, no second model.** Nemesis continues to call `ErenshorDeepSims.NemesisEventBridge.RequestNemesisLine(...)` by reflection. If Deep Sims is absent/refuses/fails/times out, deterministic Nemesis templates provide the bounded fallback.
-- **Native chat presentation.** Rival messages contain visible text only (`Ariadne tells you: ...`). Nemesis learns the actual runtime native incoming/outgoing tell color argument from vanilla `UpdateSocialLog.LogAdd(text, color)` traffic and supplies that separately. Until a safe native tell style has been observed it uses the one-argument native `LogAdd(text)` path instead of guessing a color token. Literal `<color=...>` is never embedded.
+- **Native whisper presentation.** Rival tells use Erenshor's typed `ChatLogLine` Whisper channel with native `[WHISPER TO]` / `[WHISPER FROM]` visible formatting. Nemesis learns the actual runtime Whisper `ColorString` from native typed traffic when available and uses the game's known `#FF62D1` whisper color as a first-message compatibility fallback. Literal `<color=...>` is never embedded in the message text.
 - `/enemesis status` / `diagnose` now expose bounded assignment, identity availability, candidate count, Deep Sims availability, conversation state, and native chat-style status without private paths/prompts/account data.
 
 ### Conversation ownership
@@ -37,7 +37,7 @@ Nemesis consumes a normal player line only when the **current** rival's exact na
 
 ### Chat-color compatibility
 
-Erenshor's current chat sink still exposes `UpdateSocialLog.LogAdd(string text, string color)`, but the supplied current project demonstrates that guessed legacy color strings can leak rich-text markup on some builds. 0.3.0 therefore does not hardcode a Nemesis color name. It reuses a color value actually observed from vanilla tell traffic; color stays metadata and the message string stays markup-free. If no native tell color has been observed yet, it uses `LogAdd(text)` and favors correct/readable native presentation over inventing an unverified purple encoding.
+Erenshor's current chat system routes channel/filter/color metadata through `ChatLogLine`; the legacy `LogAdd(string, string)` overload remains only a compatibility fallback. Nemesis therefore emits owned tells as `ChatLogLine.LogType.Whisper`, captures native Whisper `ColorString` when real native traffic is observed, and keeps the visible message markup-free. The first Nemesis-owned whisper cannot rely on observing vanilla traffic first (Nemesis intentionally intercepts it), so `#FF62D1` is retained as the compatibility fallback rather than falling through to white Say presentation. **NEEDS LOCAL REVIEW:** the packet intentionally omits `Assembly-CSharp.dll`, so the typed game API must be compile-verified against the installed build.
 
 ## Behavior retained from 0.2.0
 
