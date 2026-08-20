@@ -45,6 +45,39 @@ namespace ErenshorNemesis
             catch { return false; }
         }
 
+        // Read-only: resolves the active character's own progression cohort (its real save-slot
+        // index), fully independent of the Friends list (SimPlayerTracking.FriendedBy). Never reads
+        // or writes TiedToSlot/FriendedBy on the player's own slot data, and never touches disk -
+        // GameData.CurrentCharacterSlot/GameData.SaveSlots are already the loaded, live native state.
+        internal static bool TryCurrentProgressionCohort(out int cohortSlot)
+        {
+            cohortSlot = -1;
+            try
+            {
+                if (GameData.CurrentCharacterSlot == null || GameData.SaveSlots == null) return false;
+                int index = GameData.CurrentCharacterSlot.index;
+                int count = GameData.SaveSlots.Count;
+                bool hasCharacter = index >= 0 && index < count && GameData.SaveSlots[index] != null &&
+                    !string.IsNullOrWhiteSpace(GameData.SaveSlots[index].CharName);
+                return NemesisProgressionCohortPolicy.TryResolveCurrentCohort(index, count, hasCharacter, out cohortSlot);
+            }
+            catch { return false; }
+        }
+
+        // Read-only: compares a candidate's native TiedToSlot against the already-resolved cohort
+        // slot. Never mutates sim.TiedToSlot/sim.FriendedBy.
+        internal static bool TryIsSameProgressionCohort(SimPlayerTracking sim, int cohortSlot, out bool sameCohort)
+        {
+            sameCohort = false;
+            if (sim == null || cohortSlot < 0) return false;
+            try
+            {
+                sameCohort = NemesisProgressionCohortPolicy.IsSameProgressionCohort(sim.TiedToSlot, cohortSlot);
+                return true;
+            }
+            catch { return false; }
+        }
+
         internal static NemesisGuildRosterSnapshot ReadCurrentGuild(string verifiedPlayerName)
         {
             NemesisGuildRosterSnapshot result = new NemesisGuildRosterSnapshot();

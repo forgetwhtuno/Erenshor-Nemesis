@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
@@ -29,6 +30,15 @@ namespace ErenshorNemesis
         private static NemesisStateEntry<string> RecentZoneTaunts, RecentConversation;
         private static NemesisStateEntry<string> ProcessedMatches, RetiredName;
         private static NemesisStateEntry<int> RivalrySeed, DialogueSequence, LastTemplateIndex, LastLineHash;
+        // Bounded response-tone variety (see NemesisResponsePolicy): the last few authored categories
+        // used, so the same flavor of line cannot repeat several turns running. Small and bounded -
+        // never a conversation transcript.
+        private static NemesisStateEntry<string> RecentResponseBuckets;
+        private static string LastResponseBucketText = "";
+        // Real, verified Practice Duel result vs the CURRENT Nemesis (optional integration - see
+        // DuelBridge). "" until a genuine duel_completed event names this exact rival.
+        private static NemesisStateEntry<string> LastDuelVerdict;
+        private static NemesisStateEntry<long> LastDuelUtc;
 
         private const int MaxProcessedMatches = 24;
         private const int MaxRememberedZones = 6;
@@ -93,23 +103,6 @@ namespace ErenshorNemesis
             "No more warm-ups. Next one counts.",
             "You've earned the respect. Now earn the win."
         };
-        private static readonly string[] RepliesNew =
-        {
-            "We'll see.", "Talk is easy. Show me out there.", "Keep that confidence.",
-            "I heard you.", "Save it for the next fight.", "Noted. Truly."
-        };
-        private static readonly string[] RepliesRival =
-        {
-            "Bold. I like bold.", "Say it again after the next one.", "You're not wrong to be confident.",
-            "I'll hold you to that.", "Words are cheap out here, but fine.", "Fair enough. Prove it."
-        };
-        private static readonly string[] RepliesHeated =
-        {
-            "After everything, you still have something to say. Good.",
-            "That's the attitude that got us here.", "I'd expect nothing less from you.",
-            "Keep talking. It suits the rivalry.", "You've earned the right to say that.",
-            "Then let's not keep each other waiting."
-        };
         private static readonly string[] PlayerVictory =
         {
             "You got me this time. Don't expect a repeat.",
@@ -161,6 +154,61 @@ namespace ErenshorNemesis
             "I tracked you down. Make it worth the walk.", "Right here, right now."
         };
 
+        // Direct-reply authored pools (see NemesisResponsePolicy). A recurring rival should not be
+        // hostile every sentence - most of a rival's chatter is ordinary old-MMO small talk, and the
+        // flavor-specific pools below only ever get chosen when a real fact backs them (see Reply()).
+        private static readonly string[] ReplyNeutralGreeting =
+        {
+            "Hello, you XPing today?", "Hey. Been grinding?", "Didn't expect to see you around.",
+            "Still at it?", "Hey. Heading somewhere?", "Back again?", "Hey, what's going on?"
+        };
+        private static readonly string[] ReplyNeutralSmallTalk =
+        {
+            "Been grinding?", "What are you working on?", "Heading out somewhere?",
+            "How's the grind treating you?", "Loot been decent lately?", "Anything good drop for you?",
+            "Busy day, or just poking around?"
+        };
+        private static readonly string[] ReplyCompetitiveGeneral =
+        {
+            "Keeping up?", "Still trying to catch me?", "Been getting stronger?",
+            "Training, or just talking?", "Don't fall behind on my account.",
+            "Let's see who's further along.", "We'll see.", "Talk is easy. Show me out there.",
+            "Bold. I like bold.", "Words are cheap out here, but fine.", "Fair enough. Prove it."
+        };
+        private static readonly string[] ReplyCompetitiveAhead =
+        {
+            "Guess I'll have to catch up.", "You've pulled ahead. Not for long.",
+            "Enjoy the lead while you have it.", "You're outpacing me. Noted."
+        };
+        private static readonly string[] ReplyCompetitiveBehind =
+        {
+            "Still behind, huh?", "Catch up when you can.", "I'll wait. Sort of.",
+            "Close the gap first."
+        };
+        private static readonly string[] ReplyRespectful =
+        {
+            "You're getting better.", "Not bad.", "I'll give you that one.",
+            "You've earned some respect. Some.", "I'd expect nothing less from you.",
+            "You've earned the right to say that."
+        };
+        // Nemesis's own recent win vs the player: confident, not gloating.
+        private static readonly string[] ReplyRecentWin =
+        {
+            "Recovered yet?", "Want another lesson?", "Thought you'd avoid me.",
+            "Still thinking about last time?"
+        };
+        // Nemesis's own recent loss vs the player: annoyed, not petty.
+        private static readonly string[] ReplyRecentLoss =
+        {
+            "Don't start.", "You got lucky.", "I haven't forgotten.",
+            "Say that again after a rematch."
+        };
+        private static readonly string[] ReplyLongTimeNoSee =
+        {
+            "Back already?", "It's been a while.", "Didn't think I'd hear from you again.",
+            "Look who remembered me."
+        };
+
         private sealed class PendingVoice
         {
             internal int Token, Generation;
@@ -178,6 +226,7 @@ namespace ErenshorNemesis
             internal readonly List<SimPlayerTracking> ExplicitFriends = new List<SimPlayerTracking>();
             internal bool FriendAuthorityKnown;
             internal bool GuildAuthorityKnown;
+            internal bool CohortAuthorityKnown;
         }
 
         internal static void Initialize(NemesisSettings settings, NemesisStateStore state, INemesisLog log)
@@ -199,6 +248,32 @@ namespace ErenshorNemesis
             AmbushMinimumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.AmbushMinimumMinutes; }, delegate(int v) { Settings.AmbushMinimumMinutes = v; });
             AmbushMaximumMinutes = new NemesisConfigEntry<int>(delegate { return Settings.AmbushMaximumMinutes; }, delegate(int v) { Settings.AmbushMaximumMinutes = v; });
             AmbushChance = new NemesisConfigEntry<int>(delegate { return Settings.AmbushChance; }, delegate(int v) { Settings.AmbushChance = v; });
+            // Optional: only records a fact if Practice Duel is installed and actually exposes the
+            // event. Absent, disabled, or an older build with no such event all leave Nemesis exactly
+            // as before - see DuelBridge.
+            DuelBridge.TrySubscribe();
+        }
+
+        // Called by DuelBridge only for a real duel_completed event whose OpponentName names the exact
+        // CURRENT Nemesis. A timeout (no winner token) records nothing - Nemesis never guesses who won
+        // a duel that produced no definitive result.
+        internal static void HandleDuelCompleted(string opponentName, string winner)
+        {
+            try
+            {
+                if (!HasNemesis() || string.IsNullOrWhiteSpace(opponentName) || string.IsNullOrWhiteSpace(winner)) return;
+                string trimmedOpponent = opponentName.Trim();
+                if (!string.Equals(trimmedOpponent, Name.Value, StringComparison.OrdinalIgnoreCase)) return;
+                string trimmedWinner = winner.Trim();
+                string verdict;
+                if (string.Equals(trimmedWinner, "player", StringComparison.OrdinalIgnoreCase)) verdict = "player_win";
+                else if (string.Equals(trimmedWinner, trimmedOpponent, StringComparison.OrdinalIgnoreCase)) verdict = "nemesis_win";
+                else return;
+                if (LastDuelVerdict != null) LastDuelVerdict.Value = verdict;
+                if (LastDuelUtc != null) LastDuelUtc.Value = DateTime.UtcNow.Ticks;
+                Dirty = true;
+            }
+            catch { }
         }
 
         internal static void Tick()
@@ -329,6 +404,7 @@ namespace ErenshorNemesis
                 SimPlayerTracking legacy = FindTracking(Name.Value);
                 if (legacy != null)
                 {
+                    if (InvalidateOnCohortMismatch(legacy, -1)) return;
                     int resolved = TrackingStableId(legacy);
                     if (resolved >= 0) { StableId.Value = resolved; Dirty = true; }
                     MissingIdentityChecks = 0; MissingIdentityFirstAt = 0f;
@@ -350,6 +426,7 @@ namespace ErenshorNemesis
             SimPlayerTracking resolvedTracking = FindTrackingByStableId(savedId);
             if (resolvedTracking != null)
             {
+                if (InvalidateOnCohortMismatch(resolvedTracking, savedId)) return;
                 MissingIdentityChecks = 0; MissingIdentityFirstAt = 0f;
                 string liveName = (resolvedTracking.SimName ?? string.Empty).Trim();
                 if (liveName.Length > 0 && !string.Equals(liveName, Name.Value, StringComparison.Ordinal))
@@ -375,6 +452,28 @@ namespace ErenshorNemesis
         {
             try { return !GameData.Zoning && GameData.SimMngr != null && GameData.SimMngr.Sims != null && GameData.SimMngr.Sims.Any(x => x != null); }
             catch { return false; }
+        }
+
+        // TiedToSlot is a Sim-global native field, not per-character: another character (a different
+        // save slot) can /friend this same Sim later and silently repoint it away from this
+        // character's cohort. Unlike a temporarily-missing roster entry, a definitively-known cohort
+        // mismatch is not a transient condition worth debouncing - it is invalidated immediately, the
+        // same "invalidate/reselect cleanly" path used for a permanently-missing identity. Unknown
+        // cohort state (unresolvable current slot) never counts as a mismatch: this never mutates
+        // TiedToSlot/FriendedBy, it only reads them.
+        private static bool InvalidateOnCohortMismatch(SimPlayerTracking tracking, int savedId)
+        {
+            int cohortSlot;
+            if (!NemesisNativeSocialRoster.TryCurrentProgressionCohort(out cohortSlot)) return false;
+            bool sameCohort = false;
+            if (!NemesisNativeSocialRoster.TryIsSameProgressionCohort(tracking, cohortSlot, out sameCohort)) return false;
+            if (sameCohort) return false;
+
+            Log.LogInfo("nemesis_identity cohort_changed" + (savedId >= 0 ? " stable_id=" + savedId : "") +
+                "; prior_name=" + Clean(Name.Value, 40));
+            ClearRivalForReplacement("invalidated");
+            NextAutomaticAssignmentAttempt = 0f;
+            return true;
         }
 
         private static SimPlayerTracking FindTrackingByStableId(int stableId)
@@ -420,6 +519,7 @@ namespace ErenshorNemesis
             ProcessedMatches.Value = ""; ProcessedCache.Clear();
             RecentConversation.Value = ""; RecentConversationLines.Clear();
             RivalrySeed.Value = NewSeed(PlayerName(), "unselected"); DialogueSequence.Value = 0; LastTemplateIndex.Value = -1; LastLineHash.Value = 0;
+            RecentResponseBuckets.Value = ""; LastResponseBucketText = ""; LastDuelVerdict.Value = ""; LastDuelUtc.Value = 0L;
             MissingIdentityChecks = 0; MissingIdentityFirstAt = 0f; Dirty = true; Save();
         }
 
@@ -464,6 +564,9 @@ namespace ErenshorNemesis
             DialogueSequence = State.Bind(section, "DialogueSequence", 0, "Persistent bounded sequence used to vary templates.");
             LastTemplateIndex = State.Bind(section, "LastTemplateIndex", -1, "Prevents immediate repeated rivalry templates within one pool.");
             LastLineHash = State.Bind(section, "LastLineHash", 0, "Prevents the same line repeating immediately across stage or pool changes.");
+            RecentResponseBuckets = State.Bind(section, "RecentResponseBuckets", "", "Small bounded list of the last authored reply categories used, so the same tone does not repeat several turns running.");
+            LastDuelVerdict = State.Bind(section, "LastDuelVerdict", "", "Most recent verified Practice Duel result vs this exact Nemesis: player_win, nemesis_win, or empty if none recorded.");
+            LastDuelUtc = State.Bind(section, "LastDuelUtcTicks", 0L, "UTC timestamp of LastDuelVerdict.");
         }
 
         // 0.1.0 keyed only from the character name. Adopt that data once for the slot-qualified key.
@@ -498,7 +601,24 @@ namespace ErenshorNemesis
         private static void Select(string requested)
         {
             SimPlayerTracking match = ExplicitCandidates().FirstOrDefault(x => string.Equals(x.SimName, requested, StringComparison.OrdinalIgnoreCase));
-            if (match == null) { Say("[Nemesis] '" + Clean(requested, 40) + "' is not eligible for deliberate selection. Use /enemesis candidates."); return; }
+            if (match == null)
+            {
+                // A same-name Sim that is otherwise safe but tracks a different character's
+                // progression gets a specific, actionable rejection rather than the generic
+                // "not eligible" message, so a manual choice that would badly over/under-level this
+                // character is never silently refused for an unclear reason.
+                SimPlayerTracking rejected = FindTracking(requested);
+                int cohortSlot;
+                bool sameCohort;
+                if (rejected != null && NemesisNativeSocialRoster.TryCurrentProgressionCohort(out cohortSlot) &&
+                    NemesisNativeSocialRoster.TryIsSameProgressionCohort(rejected, cohortSlot, out sameCohort) && !sameCohort)
+                {
+                    Say("[Nemesis] '" + Clean(requested, 40) + "' tracks a different character's progression and cannot become this character's rival.");
+                    return;
+                }
+                Say("[Nemesis] '" + Clean(requested, 40) + "' is not eligible for deliberate selection. Use /enemesis candidates.");
+                return;
+            }
             SelectResolved(match, NemesisSelectionOrigin.Explicit);
         }
 
@@ -553,6 +673,7 @@ namespace ErenshorNemesis
                 DesignatedUtc.Value = DateTime.UtcNow.Ticks; ProcessedMatches.Value = ""; ProcessedCache.Clear();
                 NextTauntUtc.Value = 0L; NextAmbushUtc.Value = 0L; LastConversationUtc.Value = 0L;
                 RecentConversation.Value = ""; RecentConversationLines.Clear();
+                RecentResponseBuckets.Value = ""; LastResponseBucketText = ""; LastDuelVerdict.Value = ""; LastDuelUtc.Value = 0L;
             }
             MissingIdentityChecks = 0; MissingIdentityFirstAt = 0f;
             LastLevelCompatible = true; CompatibilityChangeAt = 0f;
@@ -656,6 +777,8 @@ namespace ErenshorNemesis
             buckets.FriendAuthorityKnown = NemesisNativeSocialRoster.TryCurrentCharacterSlot(out currentSlot);
             NemesisGuildRosterSnapshot guild = NemesisNativeSocialRoster.ReadCurrentGuild(PlayerName());
             buckets.GuildAuthorityKnown = guild != null && guild.Known;
+            int cohortSlot;
+            buckets.CohortAuthorityKnown = NemesisNativeSocialRoster.TryCurrentProgressionCohort(out cohortSlot);
 
             int range = Clamp(LevelRange.Value, 1, 10);
             List<NemesisCandidateFact> facts = new List<NemesisCandidateFact>();
@@ -670,11 +793,16 @@ namespace ErenshorNemesis
                 bool isFriend = false;
                 bool friendKnown = buckets.FriendAuthorityKnown &&
                     NemesisNativeSocialRoster.TryIsFriend(sim, currentSlot, out isFriend);
+                bool sameCohort = false;
+                bool cohortKnown = buckets.CohortAuthorityKnown &&
+                    NemesisNativeSocialRoster.TryIsSameProgressionCohort(sim, cohortSlot, out sameCohort);
 
                 NemesisCandidateFact fact = new NemesisCandidateFact();
                 fact.Name = candidateName;
                 fact.LevelDistance = Math.Abs(sim.Level - level);
                 fact.BaseEligible = true;
+                fact.CohortKnown = cohortKnown;
+                fact.SameCohort = cohortKnown && sameCohort;
                 fact.FriendKnown = friendKnown;
                 fact.IsFriend = friendKnown && isFriend;
                 fact.GuildKnown = buckets.GuildAuthorityKnown;
@@ -757,20 +885,130 @@ namespace ErenshorNemesis
             return true;
         }
 
+        // A whisper to the current Nemesis by exact name is just as much a direct address as party/
+        // group chat with the name-and-punctuation form above - it was simply never checked before,
+        // so it fell through to native tell-handling and answered with an ordinary vanilla Sim line
+        // instead of ever reaching Nemesis's own authored voice. A whisper to any OTHER Sim is refused
+        // here and left completely untouched for native handling.
+        internal static bool TryHandleWhisperAddress(string rawText, out string addressedMessage)
+        {
+            addressedMessage = string.Empty;
+            if (!Ready() || !HasNemesis()) return false;
+            string parsed;
+            if (!NemesisConversationPolicy.TryExtractWhisperAddress(rawText, Name.Value, out parsed)) return false;
+            addressedMessage = parsed;
+            Reply(parsed);
+            return true;
+        }
+
         // Player text is HEARD context only. It never becomes a verified fact. Exact-name chat and
         // /enemesis reply share this same path, so diagnostics cannot diverge from normal play.
+        // A recent duel/PvP fact stops being "recent" flavor after this long, so RecentWin/RecentLoss
+        // cannot linger forever on one old result.
+        private const double DuelFactRecentHours = 72.0;
+        // No conversation recorded yet, or a gap at least this long, is a genuine verified fact (the
+        // state literally has no more recent timestamp) - never an invented absence.
+        private const double LongTimeNoSeeHours = 2.0;
+
         private static void Reply(string playerText)
         {
             if (!HasNemesis()) { Say("[Nemesis] Awaiting Rival. No current Nemesis can receive that reply."); return; }
             string clean = SanitizeHeard(playerText);
             if (clean.Length == 0) { Say("[Nemesis] Usage: /enemesis reply <message>"); return; }
             string heardContext = NemesisConversationPolicy.BuildHeardContext(RecentConversationLines, clean, 176);
-            ErenshorNemesisPlugin.ChatOutgoingTell("You tell " + Clean(Name.Value, 60) + ": " + clean);
+            ErenshorNemesisPlugin.ChatOutgoingTell("[WHISPER TO] " + Clean(Name.Value, 60) + ": " + clean);
             RememberConversation(true, clean);
             Replies.Value = Math.Min(9999, Replies.Value + 1); Dirty = true;
-            string stage = Stage();
-            string pool = stage == "heated" ? "reply_heated" : stage == "rival" ? "reply_rival" : "reply_new";
-            Speak("reply", Choose(stage == "heated" ? RepliesHeated : stage == "rival" ? RepliesRival : RepliesNew, pool + ":" + clean), heardContext);
+
+            NemesisResponseFacts facts = BuildResponseFacts(clean);
+            List<NemesisResponseBucket> validBuckets = NemesisResponsePolicy.ValidBuckets(facts);
+            List<NemesisResponseBucket> recentBuckets = LoadRecentBuckets();
+            int bucketSeed = (RivalrySeed == null ? 1 : RivalrySeed.Value) ^ StableHash("bucket:" + clean) ^
+                (DialogueSequence == null ? 0 : DialogueSequence.Value);
+            NemesisResponseBucket chosen = NemesisResponsePolicy.ChooseBucket(validBuckets, recentBuckets, bucketSeed);
+            SaveRecentBuckets(NemesisResponsePolicy.PushHistory(recentBuckets, chosen));
+            LastResponseBucketText = chosen.ToString();
+
+            Speak("reply", Choose(PoolForBucket(chosen), "reply_" + chosen + ":" + clean), heardContext);
+        }
+
+        // Every field is read from state NemesisDirector already tracks (level stats, Stage(),
+        // LastDuelVerdict/Utc, LastConversationUtc). Nothing here is invented; a fact that is not
+        // actually known simply stays at its false/unknown default and the matching bucket stays
+        // ineligible (see NemesisResponsePolicy.ValidBuckets).
+        private static NemesisResponseFacts BuildResponseFacts(string cleanMessage)
+        {
+            NemesisResponseFacts facts = new NemesisResponseFacts();
+            facts.IsGreeting = NemesisResponsePolicy.LooksLikeGreeting(cleanMessage);
+
+            SimPlayerTracking tracking = ResolveCurrentTracking();
+            int playerLevel = PlayerLevel();
+            if (tracking != null && tracking.Level > 0 && playerLevel > 0)
+            {
+                facts.LevelKnown = true;
+                facts.LevelDelta = playerLevel - tracking.Level;
+            }
+
+            facts.RivalStageEstablished = Stage() != "new";
+
+            string duelVerdict = LastDuelVerdict == null ? "" : LastDuelVerdict.Value ?? "";
+            if (duelVerdict.Length > 0 && LastDuelUtc != null && LastDuelUtc.Value > 0)
+            {
+                double hoursSince = Math.Max(0.0, (DateTime.UtcNow.Ticks - LastDuelUtc.Value) / (double)TimeSpan.TicksPerHour);
+                if (hoursSince <= DuelFactRecentHours)
+                {
+                    facts.HasRecentDuelFact = true;
+                    facts.RecentDuelWasNemesisWin = string.Equals(duelVerdict, "nemesis_win", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            long lastConversation = LastConversationUtc == null ? 0L : LastConversationUtc.Value;
+            if (lastConversation <= 0L) facts.LongGapSinceLastConversation = true;
+            else
+            {
+                double hoursSinceTalk = Math.Max(0.0, (DateTime.UtcNow.Ticks - lastConversation) / (double)TimeSpan.TicksPerHour);
+                facts.LongGapSinceLastConversation = hoursSinceTalk >= LongTimeNoSeeHours;
+            }
+            return facts;
+        }
+
+        private static string[] PoolForBucket(NemesisResponseBucket bucket)
+        {
+            switch (bucket)
+            {
+                case NemesisResponseBucket.NeutralGreeting: return ReplyNeutralGreeting;
+                case NemesisResponseBucket.CompetitiveGeneral: return ReplyCompetitiveGeneral;
+                case NemesisResponseBucket.CompetitiveAhead: return ReplyCompetitiveAhead;
+                case NemesisResponseBucket.CompetitiveBehind: return ReplyCompetitiveBehind;
+                case NemesisResponseBucket.Respectful: return ReplyRespectful;
+                case NemesisResponseBucket.RecentWin: return ReplyRecentWin;
+                case NemesisResponseBucket.RecentLoss: return ReplyRecentLoss;
+                case NemesisResponseBucket.LongTimeNoSee: return ReplyLongTimeNoSee;
+                default: return ReplyNeutralSmallTalk;
+            }
+        }
+
+        private static List<NemesisResponseBucket> LoadRecentBuckets()
+        {
+            List<NemesisResponseBucket> result = new List<NemesisResponseBucket>();
+            string raw = RecentResponseBuckets == null ? "" : RecentResponseBuckets.Value ?? "";
+            if (raw.Length == 0) return result;
+            string[] parts = raw.Split('|');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                NemesisResponseBucket parsed;
+                if (Enum.TryParse(parts[i], out parsed)) result.Add(parsed);
+            }
+            return result;
+        }
+
+        private static void SaveRecentBuckets(List<NemesisResponseBucket> buckets)
+        {
+            if (RecentResponseBuckets == null || buckets == null) return;
+            string[] names = new string[buckets.Count];
+            for (int i = 0; i < buckets.Count; i++) names[i] = buckets[i].ToString();
+            RecentResponseBuckets.Value = string.Join("|", names);
+            Dirty = true;
         }
 
         private static string SanitizeHeard(string value)
@@ -964,7 +1202,7 @@ namespace ErenshorNemesis
         private static void EmitLine(string type, string speaker, string line, string source)
         {
             string text = Clean(line, 180); if (text.Length == 0) return;
-            ErenshorNemesisPlugin.ChatRivalTell(Clean(speaker, 60) + " tells you: " + text);
+            ErenshorNemesisPlugin.ChatRivalTell("[WHISPER FROM] " + Clean(speaker, 60) + ": " + text);
             RememberConversation(false, text);
             Notify("nemesis_" + type, "", type);
             Log.LogInfo("nemesis_dialogue type=" + type + "; name=" + speaker + "; source=" + source);
@@ -1125,10 +1363,18 @@ namespace ErenshorNemesis
                 : "[Nemesis] " + Name.Value + " is dormant (" + reason + "). Your Nemesis is unchanged and resumes when eligible.");
         }
 
+        // Deep Sims may render richer language from this, but it must never decide whether any of
+        // these facts happened - every field here is read the same way Reply()'s fact-gating reads
+        // them, so the optional LLM voice can never claim more than the deterministic voice can.
         private static string VerifiedRecord()
         {
+            NemesisResponseFacts facts = BuildResponseFacts("");
+            string levelRelation = !facts.LevelKnown ? "unknown" :
+                facts.LevelDelta > 0 ? "player_ahead" : facts.LevelDelta < 0 ? "player_behind" : "even";
+            string duelFact = facts.HasRecentDuelFact ? (facts.RecentDuelWasNemesisWin ? "nemesis_win" : "player_win") : "none";
             return "stage=" + Stage() + "; player_wins=" + Wins.Value + "; nemesis_wins=" + Losses.Value +
                 "; player_disengaged=" + Escapes.Value + "; nemesis_retreated=" + Retreats.Value +
+                "; level_relation=" + levelRelation + "; recent_duel=" + duelFact +
                 ". No other past event is verified.";
         }
         private static string ChooseTauntLine()
@@ -1254,10 +1500,8 @@ namespace ErenshorNemesis
             if (buckets == null) buckets = new CandidateBuckets();
             List<string> lines = new List<string>();
 
-            if (!buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
-                lines.Add("AUTO: waiting for authoritative native " +
-                    (!buckets.FriendAuthorityKnown && !buckets.GuildAuthorityKnown ? "Friends + Guild state" :
-                     !buckets.FriendAuthorityKnown ? "Friends state" : "Guild state"));
+            if (!buckets.CohortAuthorityKnown || !buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
+                lines.Add("AUTO: waiting for authoritative native " + PendingAuthorityLabel(buckets));
             else if (buckets.Primary.Count > 0)
                 lines.Add("AUTO: " + FormatCandidates(buckets.Primary, 5));
             else if (buckets.GuildFallback.Count > 0)
@@ -1279,8 +1523,8 @@ namespace ErenshorNemesis
         {
             if (buckets == null) return "AUTO: unavailable";
             List<string> lines = new List<string>();
-            if (!buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
-                lines.Add("AUTO: waiting for native Friends/Guild state");
+            if (!buckets.CohortAuthorityKnown || !buckets.FriendAuthorityKnown || !buckets.GuildAuthorityKnown)
+                lines.Add("AUTO: waiting for native " + PendingAuthorityLabel(buckets));
             else if (buckets.Primary.Count > 0)
                 lines.Add("AUTO: " + FormatCandidates(buckets.Primary, 3));
             else if (buckets.GuildFallback.Count > 0)
@@ -1291,6 +1535,15 @@ namespace ErenshorNemesis
             if (buckets.ExplicitFriends.Count > 0)
                 lines.Add("FRIENDS • explicit only: " + FormatCandidates(buckets.ExplicitFriends, 2));
             return string.Join("\n", lines.ToArray());
+        }
+
+        private static string PendingAuthorityLabel(CandidateBuckets buckets)
+        {
+            List<string> missing = new List<string>();
+            if (!buckets.CohortAuthorityKnown) missing.Add("Character");
+            if (!buckets.FriendAuthorityKnown) missing.Add("Friends");
+            if (!buckets.GuildAuthorityKnown) missing.Add("Guild");
+            return string.Join(" + ", missing.ToArray()) + " state";
         }
 
         private static bool ContainsCandidate(List<SimPlayerTracking> list, string name)
@@ -1328,7 +1581,47 @@ namespace ErenshorNemesis
                 "; lastTaunt=" + (LastTauntUtc == null ? "never" : UtcText(LastTauntUtc.Value)) +
                 "; conversation=" + ConversationState() +
                 "; chatStyle=" + ErenshorNemesisPlugin.ChatStyleStatus() +
-                "; pvp=" + PvpBridge.Status() + ".";
+                "; pvp=" + PvpBridge.Status() +
+                "; duel=" + (DuelBridge.Available ? "available" : "unavailable") +
+                "; standaloneTone=" + (HasNemesis() ? Stage() : "n/a") +
+                "; lastResponseBucket=" + (LastResponseBucketText.Length == 0 ? "none" : LastResponseBucketText) +
+                "; recentRivalEvent=" + RecentRivalEventText() +
+                "; templateHistoryCount=" + LoadRecentBuckets().Count +
+                "; " + CohortDiagnosticText() + ".";
+        }
+
+        // Bounded, on-demand only (reachable only from /enemesis diagnose, never Tick()). Never dumps
+        // private conversation text - just the single verified duel-fact label, if any.
+        private static string RecentRivalEventText()
+        {
+            string verdict = LastDuelVerdict == null ? "" : LastDuelVerdict.Value ?? "";
+            if (verdict.Length == 0 || LastDuelUtc == null || LastDuelUtc.Value <= 0) return "none";
+            return verdict + "@" + UtcText(LastDuelUtc.Value);
+        }
+
+        // Bounded, on-demand diagnostic (never per-frame): read-only rivalSlot/currentSlot/
+        // sameCharacter view of the native progression-cohort binding used by the same-slot gate.
+        private static string CohortDiagnosticText()
+        {
+            int currentSlot;
+            bool currentKnown = NemesisNativeSocialRoster.TryCurrentProgressionCohort(out currentSlot);
+            string currentText = currentKnown ? currentSlot.ToString(CultureInfo.InvariantCulture) : "unresolved";
+            if (!HasNemesis()) return "rivalSlot=none; currentSlot=" + currentText + "; sameCharacter=n/a";
+
+            SimPlayerTracking tracking = ResolveCurrentTracking();
+            if (tracking == null) return "rivalSlot=unresolved; currentSlot=" + currentText + "; sameCharacter=unknown";
+
+            bool sameCohort = false;
+            bool cohortResolved = currentKnown && NemesisNativeSocialRoster.TryIsSameProgressionCohort(tracking, currentSlot, out sameCohort);
+            string sameText = cohortResolved ? (sameCohort ? "true" : "false") : "unknown";
+
+            int friendSlot; bool isFriend = false;
+            string friendText = NemesisNativeSocialRoster.TryCurrentCharacterSlot(out friendSlot) &&
+                NemesisNativeSocialRoster.TryIsFriend(tracking, friendSlot, out isFriend) ? (isFriend ? "true" : "false") : "unknown";
+
+            return "rivalSlot=" + tracking.TiedToSlot.ToString(CultureInfo.InvariantCulture) +
+                "; currentSlot=" + currentText + "; sameCharacter=" + sameText +
+                "; level=" + tracking.Level.ToString(CultureInfo.InvariantCulture) + "; friend=" + friendText;
         }
 
         private static string AssignmentOriginText()
@@ -1557,6 +1850,7 @@ namespace ErenshorNemesis
             Pending.Clear();
             try { if (State != null) State.Save(); } catch { }
             CharacterKey = ""; Dirty = false;
+            DuelBridge.Unsubscribe();
         }
 
         // Exercises the confirmation gate directly. It must never leave a redeemable confirmation
@@ -1780,6 +2074,74 @@ namespace ErenshorNemesis
         { PropertyInfo p = t.GetProperty(name, BindingFlags.Public | BindingFlags.Static); return p == null ? "" : Convert.ToString(p.GetValue(null, null)) ?? ""; }
         internal static string Status()
         { Type t = Api(); return t == null ? "not installed" : "bridge v" + Convert.ToString(t.GetField("ContractVersion").GetValue(null)); }
+    }
+
+    // Optional Practice Duel integration. ErenshorDuel.PracticeDuelEvents.SemanticEvent is a public,
+    // documented, reflection-discoverable C# event (ContractVersion 2 at the time this was written)
+    // carrying real duel lifecycle facts. Subscribed reflectively so Nemesis carries no compile-time
+    // reference to ErenshorDuel: absent, disabled, or an older build with no such event all leave
+    // Nemesis working exactly as before. Only a duel_completed event naming the CURRENT Nemesis is
+    // ever recorded (see NemesisDirector.HandleDuelCompleted); every other event and every other
+    // opponent is observed and discarded without effect.
+    internal static class DuelBridge
+    {
+        private static bool _subscribeAttempted;
+        private static EventInfo _eventInfo;
+        private static Delegate _handler;
+
+        internal static bool Available { get { return _eventInfo != null; } }
+
+        internal static void TrySubscribe()
+        {
+            if (_subscribeAttempted) return;
+            _subscribeAttempted = true;
+            try
+            {
+                Type t = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(a => { try { return a.GetType("ErenshorDuel.PracticeDuelEvents", false); } catch { return null; } })
+                    .FirstOrDefault(x => x != null);
+                if (t == null) return;
+                EventInfo ev = t.GetEvent("SemanticEvent", BindingFlags.Public | BindingFlags.Static);
+                if (ev == null || ev.EventHandlerType == null) return;
+                MethodInfo handlerMethod = typeof(DuelBridge).GetMethod("OnSemanticEvent", BindingFlags.NonPublic | BindingFlags.Static);
+                Delegate d = Delegate.CreateDelegate(ev.EventHandlerType, handlerMethod);
+                ev.AddEventHandler(null, d);
+                _eventInfo = ev; _handler = d;
+            }
+            catch { _eventInfo = null; _handler = null; }
+        }
+
+        internal static void Unsubscribe()
+        {
+            try { if (_eventInfo != null && _handler != null) _eventInfo.RemoveEventHandler(null, _handler); }
+            catch { }
+            _eventInfo = null; _handler = null; _subscribeAttempted = false;
+        }
+
+        // Bound via reflection to a foreign event type this file never references at compile time:
+        // Delegate.CreateDelegate supports an "object"-shaped handler for a more specific Action<T>
+        // event through ordinary reference-type delegate contravariance. Every step is wrapped so a
+        // third-party exception can never affect Nemesis or Duel.
+        private static void OnSemanticEvent(object raw)
+        {
+            try
+            {
+                if (raw == null) return;
+                Type t = raw.GetType();
+                string type = ReadString(t, raw, "Type");
+                if (!string.Equals(type, "duel_completed", StringComparison.OrdinalIgnoreCase)) return;
+                string opponent = ReadString(t, raw, "OpponentName");
+                if (string.IsNullOrWhiteSpace(opponent)) return;
+                NemesisDirector.HandleDuelCompleted(opponent, ReadString(t, raw, "Winner"));
+            }
+            catch { }
+        }
+
+        private static string ReadString(Type t, object instance, string property)
+        {
+            PropertyInfo p = t.GetProperty(property, BindingFlags.Public | BindingFlags.Instance);
+            return p == null ? "" : Convert.ToString(p.GetValue(instance, null)) ?? "";
+        }
     }
 
     internal static class DeepSimsBridge

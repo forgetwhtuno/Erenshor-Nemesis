@@ -1,7 +1,15 @@
 param(
     [string]$GameDir = "",
     [string]$LunarisLibDir = "",
-    [switch]$Install
+    # Defaults to true so a plain "-GameDir <dir> -LunarisLibDir <dir>" invocation matches every
+    # sibling mod's BUILD_AND_INSTALL.ps1 convention (build, then place the DLL under GameDir\
+    # plugins) - including the suite orchestrator (Erenshor-Mod-Suite/BUILD_ALL.ps1), which invokes
+    # every mod's script this same way against its own temporary staging GameDir and only copies
+    # into the REAL install after every mod has staged successfully. Pass -Install:$false to only
+    # stage a candidate without installing it (e.g. reviewing a build against the real GameDir
+    # without touching the live plugin). The running-process refusal, pre-overwrite backup, and
+    # staged/installed hash-equality check below are unchanged either way.
+    [switch]$Install = $true
 )
 $ErrorActionPreference = "Stop"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

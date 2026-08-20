@@ -90,6 +90,22 @@ internal static class StandaloneStateStoreTests
             Check("40 hub rival status stays bounded", hubRival.Length <= NemesisHubPresentation.MaxStatusLength);
             Check("41 hub exposes pending confirmation", hubRival.Contains("confirmation pending"));
             Check("42 candidate social selection policy", NemesisCandidateSelectionPolicy.RunSelfTests().StartsWith("PASS", StringComparison.Ordinal));
+            Check("43 progression cohort policy", NemesisProgressionCohortPolicy.RunSelfTests().StartsWith("PASS", StringComparison.Ordinal));
+
+            // Whisper/tell direct address: the live gap where "hey" fell through to a generic native
+            // Sim reply because nothing recognized a plain whisper to the exact current Nemesis.
+            string whisperMsg;
+            Check("44 /whisper exact address routes", NemesisConversationPolicy.TryExtractWhisperAddress("/whisper Ariadne hey", "Ariadne", out whisperMsg) && whisperMsg == "hey");
+            Check("45 /tell exact address routes", NemesisConversationPolicy.TryExtractWhisperAddress("/tell Ariadne you leveling?", "Ariadne", out whisperMsg) && whisperMsg == "you leveling?");
+            Check("46 /w short form routes", NemesisConversationPolicy.TryExtractWhisperAddress("/w Ariadne hey", "Ariadne", out whisperMsg) && whisperMsg == "hey");
+            Check("47 /t short form routes", NemesisConversationPolicy.TryExtractWhisperAddress("/t Ariadne hey", "Ariadne", out whisperMsg) && whisperMsg == "hey");
+            Check("48 whisper target is case-insensitive", NemesisConversationPolicy.TryExtractWhisperAddress("/t ariadne hey", "Ariadne", out whisperMsg) && whisperMsg == "hey");
+            Check("49 whisper to a different Sim is not consumed", !NemesisConversationPolicy.TryExtractWhisperAddress("/t Dancer hey", "Ariadne", out whisperMsg));
+            Check("50 whisper with no message is not consumed", !NemesisConversationPolicy.TryExtractWhisperAddress("/t Ariadne", "Ariadne", out whisperMsg));
+            Check("51 unrelated slash command is not consumed as a whisper", !NemesisConversationPolicy.TryExtractWhisperAddress("/enemesis status", "Ariadne", out whisperMsg));
+            Check("52 ordinary party chat is not consumed as a whisper", !NemesisConversationPolicy.TryExtractWhisperAddress("/group anyone ready?", "Ariadne", out whisperMsg));
+
+            Check("53 response policy self-tests", NemesisResponsePolicy.RunSelfTests().StartsWith("PASS", StringComparison.Ordinal));
         }
         finally { try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { } }
 
